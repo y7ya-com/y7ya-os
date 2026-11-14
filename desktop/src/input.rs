@@ -89,9 +89,15 @@ impl Desk {
         let action = keyboard.input::<Action, _>(self, code, state, serial, time, |_desk, mods, handle| {
             let sym = handle.modified_sym();
             let switching = desk_switching(_desk);
+            // In a window inside another desktop, that desktop grabs most Super
+            // shortcuts, so Ctrl+Alt works as Super too.
+            let command = mods.logo || (_desk.nested && mods.ctrl && mods.alt);
             if state != KeyState::Pressed {
                 // Letting go of Super picks the window in the switcher.
-                let super_key = matches!(sym.raw(), keysyms::KEY_Super_L | keysyms::KEY_Super_R);
+                let super_key = matches!(
+                    sym.raw(),
+                    keysyms::KEY_Super_L | keysyms::KEY_Super_R | keysyms::KEY_Control_L | keysyms::KEY_Control_R | keysyms::KEY_Alt_L | keysyms::KEY_Alt_R
+                );
                 return if switching && super_key { FilterResult::Intercept(Action::SwitcherCommit) } else { FilterResult::Forward };
             }
             if sym.raw() == keysyms::KEY_Escape && (switching || overlays_open(_desk)) {
@@ -110,7 +116,7 @@ impl Desk {
             if mods.ctrl && mods.shift && sym.raw() == keysyms::KEY_Escape {
                 return FilterResult::Intercept(Action::Spawn("taskmanager"));
             }
-            if !mods.logo {
+            if !command {
                 return FilterResult::Forward;
             }
             let action = match lower {

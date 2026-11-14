@@ -115,6 +115,8 @@ pub struct Desk {
     /// Switches virtual terminals (only in the real session).
     pub vt_switch: Option<Box<dyn FnMut(i32)>>,
     pub settings_watcher: Option<settings::Watcher>,
+    /// Running in a window inside another desktop.
+    pub nested: bool,
     pub wallpaper_path: String,
     pub wallpaper: Option<std::sync::Arc<crate::config::WallpaperImage>>,
 }
@@ -198,6 +200,7 @@ impl Desk {
             draws_cursor: false,
             vt_switch: None,
             settings_watcher: None,
+            nested: false,
             wallpaper_path: String::new(),
             wallpaper: None,
         }

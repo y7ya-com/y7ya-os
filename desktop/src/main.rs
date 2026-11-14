@@ -47,6 +47,7 @@ fn main() -> anyhow::Result<()> {
     } else if flag("--session").is_some() {
         after = Some(backend::session::init(&mut event_loop, &mut desk)?);
     } else {
+        desk.nested = true;
         after = Some(backend::winit::init(&mut event_loop, &mut desk)?);
     }
     println!("WAYLAND_DISPLAY={}", desk.socket_name.to_string_lossy());
@@ -54,6 +55,10 @@ fn main() -> anyhow::Result<()> {
     desk.start_xwayland();
     if flag("--session").is_some() {
         start_session_services(&desk);
+    } else if flag("--with-shell").is_some() {
+        // A try-out inside another desktop: the shell and sync, but leave the
+        // host session's environment alone.
+        start_desktop_services(&desk);
     }
     if let Some(cmd) = value("-c") {
         desk.spawn(&cmd);
@@ -87,6 +92,10 @@ fn start_session_services(desk: &Desk) {
     // So portals, D-Bus-activated apps and user services find this display.
     let _ = std::process::Command::new("dbus-update-activation-environment").arg("--systemd").args(vars).status();
     let _ = std::process::Command::new("systemctl").args(["--user", "import-environment"]).args(vars).status();
+    start_desktop_services(desk);
+}
+
+fn start_desktop_services(desk: &Desk) {
     for cmd in ["y7-syncd", "y7-shell", "clipboard --daemon"] {
         let program = cmd.split_whitespace().next().unwrap_or_default();
         let installed = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(program).exists()));

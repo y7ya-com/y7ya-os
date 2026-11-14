@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["apps/*", "crates/*", "desktop"]
+members = ["apps/*", "crates/*", "desktop", "tools/*"]
 
 [workspace.dependencies]
 arboard = { version = "3.7.0", default-features = false, features = ["wayland-data-control"] }

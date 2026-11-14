@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Notes: a yellow legal pad -->
+  <defs>
+    <!-- macOS icon template: 824px continuous-corner square, 100px margin -->
+    <path id="shape" d="M640.6 100C722.2 100 763 104.1 799.8 112.1L806.9 113.9C854.9 131.3 892.7 169.1 910.1 217.1L911.9 224.2C919.9 261 924 301.8 924 383.4L924 640.6C924 722.2 919.9 763 911.9 799.8L910.1 806.9C892.7 854.9 854.9 892.7 806.9 910.1L799.8 911.9C763 919.9 722.2 924 640.6 924L383.4 924C301.8 924 261 919.9 224.2 911.9L217.1 910.1C169.1 892.7 131.3 854.9 113.9 806.9L112.1 799.8C104.1 763 100 722.2 100 640.6L100 383.4C100 301.8 104.1 261 112.1 224.2L113.9 217.1C131.3 169.1 169.1 131.3 217.1 113.9L224.2 112.1C261 104.1 301.8 100 383.4 100Z"/>
+    <clipPath id="clip"><use xlink:href="#shape"/></clipPath>
+    <filter id="drop" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dy="12" stdDeviation="14" flood-opacity=".3"/>
+    </filter>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".6"/>
+      <stop offset=".3" stop-color="#fff" stop-opacity="0"/>
+      <stop offset=".75" stop-color="#000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000" stop-opacity=".18"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff0a6"/>
+      <stop offset="1" stop-color="#fbd350"/>
+    </linearGradient>
+    <linearGradient id="binding" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d4553b"/>
+      <stop offset="1" stop-color="#a8331f"/>
+    </linearGradient>
+    <linearGradient id="under" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7a4a00" stop-opacity=".28"/>
+      <stop offset="1" stop-color="#7a4a00" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <use xlink:href="#shape" fill="url(#paper)" filter="url(#drop)"/>
+  <g clip-path="url(#clip)">
+    <!-- rules and the double margin line -->
+    <g stroke="#5f9fd8" stroke-opacity=".55" stroke-width="8">
+      <path d="M100 420H924M100 492H924M100 564H924M100 636H924M100 708H924M100 780H924M100 852H924"/>
+    </g>
+    <path d="M262 290V924M278 290V924" stroke="#e5604a" stroke-opacity=".7" stroke-width="6"/>
+    <!-- handwriting -->
+    <path d="M314 490C317 489 324 488 330 486C336 484 346 483 353 479C360 475 367 468 371 462C376 456 379 449 380 445C381 441 380 438 379 438C378 438 375 441 373 445C372 449 371 456 372 462C373 468 376 475 381 479C385 483 392 485 399 486C406 487 414 485 421 483C427 481 433 478 437 475C440 472 442 469 443 467C443 465 441 464 440 464C439 464 436 465 436 467C435 469 435 472 437 475C439 478 443 481 449 483C454 485 461 486 468 486C475 486 484 485 490 483C496 481 502 478 506 475C509 472 511 469 512 467C512 465 511 464 509 464C508 464 506 465 505 467C505 469 504 472 506 475C508 478 512 481 518 483C523 485 530 487 537 486C544 485 553 483 560 479C567 475 574 467 579 461C584 455 587 447 588 443C589 439 588 436 587 436C586 436 583 439 581 443C580 447 579 455 580 461C581 467 584 475 588 479C592 483 600 485 606 486C613 487 622 485 628 483C634 481 640 478 644 475C648 472 649 469 650 467C651 465 649 464 648 464C646 464 644 465 643 467C643 469 642 472 645 475C647 478 651 481 656 483C661 485 669 487 676 486C682 485 691 478 694 476M664 490C667 489 674 487 680 486C686 485 695 485 702 483C708 481 714 478 718 475C721 472 723 469 724 467C724 465 722 464 721 464C720 464 717 465 717 467C716 469 716 472 718 475C720 478 724 481 729 483C735 485 742 487 749 486C756 485 765 483 772 479C779 475 786 468 791 462C795 456 798 449 799 445C801 441 799 438 798 438C797 438 794 441 793 445C791 449 790 456 791 462C792 468 795 475 800 479C804 483 812 486 818 486C824 486 833 478 836 476M314 562C317 561 324 559 330 558C336 557 345 557 352 555C358 553 364 550 368 547C371 544 373 541 374 539C374 537 372 536 371 536C370 536 367 537 367 539C366 541 366 544 368 547C370 550 374 553 379 555C385 557 392 559 399 558C406 557 415 555 422 551C429 547 436 540 441 534C445 528 448 521 449 517C451 513 449 510 448 510C447 510 444 513 443 517C441 521 440 528 441 534C442 540 445 547 450 551C454 555 462 557 468 558C475 559 484 557 490 555C496 553 502 550 506 547C509 544 511 541 512 539C512 537 511 536 509 536C508 536 506 537 505 539C505 541 504 544 506 547C508 550 512 553 518 555C523 557 531 559 537 558C544 557 552 550 555 548M544 562C547 561 554 560 560 558C566 556 576 555 583 551C590 547 597 540 601 534C606 528 609 521 610 517C611 513 610 510 609 510C608 510 605 513 603 517C602 521 601 528 602 534C603 540 606 547 611 551C615 555 622 557 629 558C636 559 644 557 651 555C657 553 663 550 667 547C670 544 672 541 673 539C673 537 671 536 670 536C669 536 666 537 666 539C665 541 665 544 667 547C669 550 673 553 679 555C684 557 692 559 698 558C705 557 713 550 716 548" fill="none" stroke="#3c4a6b" stroke-opacity=".75" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- perforation, the shadow under the binding, then the binding itself -->
+    <path d="M100 318H924" stroke="#8a6200" stroke-opacity=".25" stroke-width="6" stroke-dasharray="1 18" stroke-linecap="round"/>
+    <rect x="100" y="286" width="824" height="40" fill="url(#under)"/>
+    <rect x="100" y="100" width="824" height="190" fill="url(#binding)"/>
+    <path d="M100 287H924" stroke="#000" stroke-opacity=".18" stroke-width="6"/>
+    <path d="M100 280H924" stroke="#fff" stroke-opacity=".18" stroke-width="4"/>
+  </g>
+  <use xlink:href="#shape" fill="none" stroke="url(#rim)" stroke-width="8" clip-path="url(#clip)"/>
+</svg>

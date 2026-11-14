@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Calendar: a date page, JUL 17. Letters and digits are strokes, not text,
+       so the icon renders the same without fonts. -->
+  <defs>
+    <!-- macOS icon template: 824px continuous-corner square, 100px margin -->
+    <path id="shape" d="M640.6 100C722.2 100 763 104.1 799.8 112.1L806.9 113.9C854.9 131.3 892.7 169.1 910.1 217.1L911.9 224.2C919.9 261 924 301.8 924 383.4L924 640.6C924 722.2 919.9 763 911.9 799.8L910.1 806.9C892.7 854.9 854.9 892.7 806.9 910.1L799.8 911.9C763 919.9 722.2 924 640.6 924L383.4 924C301.8 924 261 919.9 224.2 911.9L217.1 910.1C169.1 892.7 131.3 854.9 113.9 806.9L112.1 799.8C104.1 763 100 722.2 100 640.6L100 383.4C100 301.8 104.1 261 112.1 224.2L113.9 217.1C131.3 169.1 169.1 131.3 217.1 113.9L224.2 112.1C261 104.1 301.8 100 383.4 100Z"/>
+    <clipPath id="clip"><use xlink:href="#shape"/></clipPath>
+    <filter id="drop" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dy="12" stdDeviation="14" flood-opacity=".3"/>
+    </filter>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".6"/>
+      <stop offset=".3" stop-color="#fff" stop-opacity="0"/>
+      <stop offset=".75" stop-color="#000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000" stop-opacity=".15"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff"/>
+      <stop offset="1" stop-color="#e9ebf0"/>
+    </linearGradient>
+    <linearGradient id="header" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff6a5c"/>
+      <stop offset="1" stop-color="#e33a2e"/>
+    </linearGradient>
+    <linearGradient id="under" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#000" stop-opacity=".14"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <use xlink:href="#shape" fill="url(#paper)" filter="url(#drop)"/>
+  <g clip-path="url(#clip)">
+    <rect x="100" y="326" width="824" height="30" fill="url(#under)"/>
+    <rect x="100" y="100" width="824" height="226" fill="url(#header)"/>
+    <path d="M100 320H924" stroke="#fff" stroke-opacity=".2" stroke-width="4"/>
+  </g>
+  <!-- JUL -->
+  <path d="M435 170V232A34 34 0 0 1 367 232M477 170V226A38 38 0 0 0 553 226V170M597 170V264H655" fill="none" stroke="#fff" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- 17 -->
+  <path d="M362 488L424 446V780M502 446H668L560 780" fill="none" stroke="#2a2a30" stroke-width="66" stroke-linecap="round" stroke-linejoin="round"/>
+  <use xlink:href="#shape" fill="none" stroke="url(#rim)" stroke-width="8" clip-path="url(#clip)"/>
+</svg>

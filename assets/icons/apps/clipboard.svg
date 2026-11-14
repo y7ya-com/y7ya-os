@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Clipboard: a board, a sheet and a metal clip -->
+  <defs>
+    <!-- macOS icon template: 824px continuous-corner square, 100px margin -->
+    <path id="shape" d="M640.6 100C722.2 100 763 104.1 799.8 112.1L806.9 113.9C854.9 131.3 892.7 169.1 910.1 217.1L911.9 224.2C919.9 261 924 301.8 924 383.4L924 640.6C924 722.2 919.9 763 911.9 799.8L910.1 806.9C892.7 854.9 854.9 892.7 806.9 910.1L799.8 911.9C763 919.9 722.2 924 640.6 924L383.4 924C301.8 924 261 919.9 224.2 911.9L217.1 910.1C169.1 892.7 131.3 854.9 113.9 806.9L112.1 799.8C104.1 763 100 722.2 100 640.6L100 383.4C100 301.8 104.1 261 112.1 224.2L113.9 217.1C131.3 169.1 169.1 131.3 217.1 113.9L224.2 112.1C261 104.1 301.8 100 383.4 100Z"/>
+    <clipPath id="clip"><use xlink:href="#shape"/></clipPath>
+    <filter id="drop" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dy="12" stdDeviation="14" flood-opacity=".3"/>
+    </filter>
+    <filter id="lift" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dy="8" stdDeviation="10" flood-color="#5a2d00" flood-opacity=".35"/>
+    </filter>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".55"/>
+      <stop offset=".3" stop-color="#fff" stop-opacity="0"/>
+      <stop offset=".75" stop-color="#000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000" stop-opacity=".2"/>
+    </linearGradient>
+    <linearGradient id="board" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e3a964"/>
+      <stop offset="1" stop-color="#b8723a"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff"/>
+      <stop offset="1" stop-color="#eef0f4"/>
+    </linearGradient>
+    <linearGradient id="metal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f5f8"/>
+      <stop offset=".55" stop-color="#c3c8d0"/>
+      <stop offset="1" stop-color="#8d939e"/>
+    </linearGradient>
+  </defs>
+  <use xlink:href="#shape" fill="url(#board)" filter="url(#drop)"/>
+  <!-- the sheet, with a second one under it -->
+  <rect x="244" y="252" width="536" height="604" rx="20" fill="#e6e8ee" transform="rotate(2.5 512 554)" filter="url(#lift)"/>
+  <rect x="244" y="244" width="536" height="604" rx="20" fill="url(#paper)" filter="url(#lift)"/>
+  <path d="M316 440H708M316 520H708M316 600H640M316 680H690M316 760H560" stroke="#c6ccd6" stroke-width="26" stroke-linecap="round"/>
+  <!-- the clip: a narrow handle with a hole, over a wide clamp bar -->
+  <g filter="url(#lift)">
+    <path d="M444 168H580C598 168 610 180 612 196L622 268H402L412 196C414 180 426 168 444 168Z" fill="url(#metal)"/>
+    <rect x="320" y="252" width="384" height="92" rx="30" fill="url(#metal)"/>
+  </g>
+  <rect x="320" y="318" width="384" height="26" rx="13" fill="#6f7580" fill-opacity=".45"/>
+  <path d="M350 256H674" stroke="#fff" stroke-opacity=".9" stroke-width="5" stroke-linecap="round"/>
+  <path d="M440 172H584" stroke="#fff" stroke-opacity=".9" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="512" cy="214" r="22" fill="#9a5a26"/>
+  <path d="M492 226A22 22 0 0 0 532 226" fill="none" stroke="#fff" stroke-opacity=".6" stroke-width="4"/>
+  <g fill="#8d939e">
+    <circle cx="362" cy="298" r="10"/>
+    <circle cx="662" cy="298" r="10"/>
+  </g>
+  <use xlink:href="#shape" fill="none" stroke="url(#rim)" stroke-width="8" clip-path="url(#clip)"/>
+</svg>

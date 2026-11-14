@@ -1,0 +1,9 @@
+[package]
+name = "render-icons"
+version = "0.1.0"
+edition = "2024"
+description = "Renders assets/icons into an installable hicolor icon tree and a contact sheet"
+publish = false
+
+[dependencies]
+resvg = { version = "0.50", default-features = false }

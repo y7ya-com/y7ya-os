@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="212 212 600 600">
+  <!-- Sync with Phone: a phone circled by two sync arrows (same geometry as sync.svg) -->
+  <g fill="none" stroke="#2e3436" stroke-width="48" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="422" y="332" width="180" height="360" rx="44"/>
+    <path d="M490 622H534"/>
+    <path d="M678 274A290 290 0 0 1 758 666"/>
+    <path d="M346 750A290 290 0 0 1 266 358"/>
+  </g>
+  <g fill="#2e3436" stroke="#2e3436" stroke-width="12" stroke-linejoin="round">
+    <path d="M717 732L716 639L800 692Z"/>
+    <path d="M307 292L308 385L224 332Z"/>
+  </g>
+</svg>

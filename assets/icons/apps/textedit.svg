@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- TextEdit: a page of text and a fountain pen -->
+  <defs>
+    <!-- macOS icon template: 824px continuous-corner square, 100px margin -->
+    <path id="shape" d="M640.6 100C722.2 100 763 104.1 799.8 112.1L806.9 113.9C854.9 131.3 892.7 169.1 910.1 217.1L911.9 224.2C919.9 261 924 301.8 924 383.4L924 640.6C924 722.2 919.9 763 911.9 799.8L910.1 806.9C892.7 854.9 854.9 892.7 806.9 910.1L799.8 911.9C763 919.9 722.2 924 640.6 924L383.4 924C301.8 924 261 919.9 224.2 911.9L217.1 910.1C169.1 892.7 131.3 854.9 113.9 806.9L112.1 799.8C104.1 763 100 722.2 100 640.6L100 383.4C100 301.8 104.1 261 112.1 224.2L113.9 217.1C131.3 169.1 169.1 131.3 217.1 113.9L224.2 112.1C261 104.1 301.8 100 383.4 100Z"/>
+    <clipPath id="clip"><use xlink:href="#shape"/></clipPath>
+    <filter id="drop" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dy="12" stdDeviation="14" flood-opacity=".3"/>
+    </filter>
+    <filter id="lift" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dy="10" stdDeviation="12" flood-color="#1c2a4a" flood-opacity=".3"/>
+    </filter>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".8"/>
+      <stop offset=".3" stop-color="#fff" stop-opacity="0"/>
+      <stop offset=".75" stop-color="#000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000" stop-opacity=".15"/>
+    </linearGradient>
+    <linearGradient id="base" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e6ecf5"/>
+      <stop offset="1" stop-color="#b9c5d8"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff"/>
+      <stop offset="1" stop-color="#f1f3f7"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="-36" x2="0" y2="36" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffe7a8"/>
+      <stop offset=".5" stop-color="#e8b65a"/>
+      <stop offset="1" stop-color="#b07a22"/>
+    </linearGradient>
+    <linearGradient id="barrel" x1="0" y1="-36" x2="0" y2="36" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5677d6"/>
+      <stop offset=".45" stop-color="#2f4aa0"/>
+      <stop offset="1" stop-color="#1a2763"/>
+    </linearGradient>
+    <linearGradient id="grip" x1="0" y1="-30" x2="0" y2="30" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#55555c"/>
+      <stop offset="1" stop-color="#1c1c20"/>
+    </linearGradient>
+  </defs>
+  <use xlink:href="#shape" fill="url(#base)" filter="url(#drop)"/>
+  <!-- the page -->
+  <rect x="232" y="164" width="520" height="704" rx="22" fill="url(#paper)" filter="url(#lift)"/>
+  <g stroke-linecap="round" stroke-width="24" fill="none">
+    <path d="M300 250H540" stroke="#5a6170" stroke-width="30"/>
+    <path d="M300 336H684M300 400H660M300 464H684M300 528H600M300 592H684M300 656H520" stroke="#c6ccd6"/>
+  </g>
+  <!-- signature in ink, ending at the nib -->
+  <path d="M296 772c18-40 44-62 52-40s-14 54 10 44 30-58 50-38 6 40 28 30 22-20 34-14" fill="none" stroke="#24366f" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- the pen, drawn along x with the nib at the origin, then laid diagonally -->
+  <g filter="url(#lift)">
+    <g transform="translate(470 766) rotate(-48)">
+      <path d="M186 -36H560a36 36 0 0 1 0 72H186Z" fill="url(#barrel)"/>
+      <rect x="206" y="-24" width="340" height="9" rx="4.5" fill="#fff" fill-opacity=".4"/>
+      <rect x="96" y="-30" width="76" height="60" rx="10" fill="url(#grip)"/>
+      <rect x="166" y="-38" width="26" height="76" rx="6" fill="url(#gold)"/>
+      <rect x="360" y="-52" width="190" height="18" rx="9" fill="url(#gold)"/>
+      <path d="M0 0C30-8 62-24 100-28V28C62 24 30 8 0 0Z" fill="url(#gold)"/>
+      <path d="M10 0H66" stroke="#7a5214" stroke-width="4" stroke-linecap="round"/>
+      <circle cx="70" cy="0" r="6" fill="#7a5214"/>
+    </g>
+  </g>
+  <use xlink:href="#shape" fill="none" stroke="url(#rim)" stroke-width="8" clip-path="url(#clip)"/>
+</svg>

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Task Manager at 32px and below: one bold graph line, no grid -->
+  <defs>
+    <!-- macOS icon template: 824px continuous-corner square, 100px margin -->
+    <path id="shape" d="M640.6 100C722.2 100 763 104.1 799.8 112.1L806.9 113.9C854.9 131.3 892.7 169.1 910.1 217.1L911.9 224.2C919.9 261 924 301.8 924 383.4L924 640.6C924 722.2 919.9 763 911.9 799.8L910.1 806.9C892.7 854.9 854.9 892.7 806.9 910.1L799.8 911.9C763 919.9 722.2 924 640.6 924L383.4 924C301.8 924 261 919.9 224.2 911.9L217.1 910.1C169.1 892.7 131.3 854.9 113.9 806.9L112.1 799.8C104.1 763 100 722.2 100 640.6L100 383.4C100 301.8 104.1 261 112.1 224.2L113.9 217.1C131.3 169.1 169.1 131.3 217.1 113.9L224.2 112.1C261 104.1 301.8 100 383.4 100Z"/>
+    <path id="screen" d="M658 152C719.6 152 750.4 155.1 778.2 161.2L783.6 162.5C819.8 175.7 848.3 204.2 861.5 240.4L862.8 245.8C868.9 273.6 872 304.4 872 366L872 658C872 719.6 868.9 750.4 862.8 778.2L861.5 783.6C848.3 819.8 819.8 848.3 783.6 861.5L778.2 862.8C750.4 868.9 719.6 872 658 872L366 872C304.4 872 273.6 868.9 245.8 862.8L240.4 861.5C204.2 848.3 175.7 819.8 162.5 783.6L161.2 778.2C155.1 750.4 152 719.6 152 658L152 366C152 304.4 155.1 273.6 161.2 245.8L162.5 240.4C175.7 204.2 204.2 175.7 240.4 162.5L245.8 161.2C273.6 155.1 304.4 152 366 152Z"/>
+    <clipPath id="clip-screen"><use xlink:href="#screen"/></clipPath>
+    <filter id="drop" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dy="12" stdDeviation="14" flood-opacity=".3"/>
+    </filter>
+    <linearGradient id="bezel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8a919c"/>
+      <stop offset="1" stop-color="#4a505a"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#22303f"/>
+      <stop offset="1" stop-color="#0b1016"/>
+    </linearGradient>
+  </defs>
+  <use xlink:href="#shape" fill="url(#bezel)" filter="url(#drop)"/>
+  <use xlink:href="#screen" fill="url(#glass)"/>
+  <g clip-path="url(#clip-screen)">
+    <path d="M152 700L300 500L420 620L560 340L700 580L872 400V872H152Z" fill="#3ef0a0" fill-opacity=".3"/>
+    <path d="M152 700L300 500L420 620L560 340L700 580L872 400" fill="none" stroke="#6dfcbb" stroke-width="60" stroke-linejoin="round" stroke-linecap="round"/>
+  </g>
+</svg>

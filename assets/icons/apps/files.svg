@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Files: a friendly blue folder with a small smile -->
+  <defs>
+    <!-- macOS icon template: 824px continuous-corner square, 100px margin -->
+    <path id="shape" d="M640.6 100C722.2 100 763 104.1 799.8 112.1L806.9 113.9C854.9 131.3 892.7 169.1 910.1 217.1L911.9 224.2C919.9 261 924 301.8 924 383.4L924 640.6C924 722.2 919.9 763 911.9 799.8L910.1 806.9C892.7 854.9 854.9 892.7 806.9 910.1L799.8 911.9C763 919.9 722.2 924 640.6 924L383.4 924C301.8 924 261 919.9 224.2 911.9L217.1 910.1C169.1 892.7 131.3 854.9 113.9 806.9L112.1 799.8C104.1 763 100 722.2 100 640.6L100 383.4C100 301.8 104.1 261 112.1 224.2L113.9 217.1C131.3 169.1 169.1 131.3 217.1 113.9L224.2 112.1C261 104.1 301.8 100 383.4 100Z"/>
+    <clipPath id="clip"><use xlink:href="#shape"/></clipPath>
+    <filter id="drop" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dy="12" stdDeviation="14" flood-opacity=".3"/>
+    </filter>
+    <filter id="lift" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dy="12" stdDeviation="14" flood-color="#0b3f8f" flood-opacity=".35"/>
+    </filter>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".8"/>
+      <stop offset=".3" stop-color="#fff" stop-opacity="0"/>
+      <stop offset=".75" stop-color="#000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000" stop-opacity=".15"/>
+    </linearGradient>
+    <linearGradient id="base" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f7faff"/>
+      <stop offset="1" stop-color="#d3e1f4"/>
+    </linearGradient>
+    <linearGradient id="back" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a8ef6"/>
+      <stop offset="1" stop-color="#1f62d0"/>
+    </linearGradient>
+    <linearGradient id="front" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7cc4ff"/>
+      <stop offset="1" stop-color="#2f86f2"/>
+    </linearGradient>
+  </defs>
+  <use xlink:href="#shape" fill="url(#base)" filter="url(#drop)"/>
+  <g filter="url(#lift)">
+    <!-- back panel with its tab -->
+    <path d="M244 244H404C424 244 438 252 450 266L476 296H780C804 296 820 312 820 336V744H204V284C204 260 220 244 244 244Z" fill="url(#back)"/>
+    <!-- a sheet of paper peeking out -->
+    <rect x="248" y="326" width="528" height="300" rx="16" fill="#fff"/>
+    <!-- front panel -->
+    <path d="M216 386H808C836 386 852 404 849 430L824 762C822 786 806 800 782 800H242C218 800 202 786 200 762L175 430C172 404 188 386 216 386Z" fill="url(#front)"/>
+  </g>
+  <path d="M216 388H808" stroke="#fff" stroke-opacity=".6" stroke-width="6" stroke-linecap="round"/>
+  <!-- the face -->
+  <g fill="#fff" fill-opacity=".92">
+    <rect x="418" y="496" width="36" height="84" rx="18"/>
+    <rect x="570" y="496" width="36" height="84" rx="18"/>
+  </g>
+  <path d="M410 650Q512 728 614 650" fill="none" stroke="#fff" stroke-opacity=".92" stroke-width="30" stroke-linecap="round"/>
+  <use xlink:href="#shape" fill="none" stroke="url(#rim)" stroke-width="8" clip-path="url(#clip)"/>
+</svg>

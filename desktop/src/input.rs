@@ -31,6 +31,7 @@ pub enum Action {
     Space(isize),
     SpaceAt(usize),
     MoveToSpace(isize),
+    Vt(i32),
     Spawn(&'static str),
 }
 
@@ -97,6 +98,10 @@ impl Desk {
             }
             // The unshifted key, so Super+Shift+M still reads as "m".
             let lower = handle.raw_latin_sym_or_raw_current_sym().unwrap_or(sym).raw();
+            // Ctrl+Alt+F1..F12 switch virtual terminals.
+            if (keysyms::KEY_XF86Switch_VT_1..=keysyms::KEY_XF86Switch_VT_12).contains(&sym.raw()) {
+                return FilterResult::Intercept(Action::Vt((sym.raw() - keysyms::KEY_XF86Switch_VT_1 + 1) as i32));
+            }
             if mods.ctrl && mods.alt && sym.raw() == keysyms::KEY_BackSpace {
                 return FilterResult::Intercept(Action::Quit);
             }
@@ -156,6 +161,11 @@ impl Desk {
             Action::Space(d) => self.switch_space(self.spaces.active.saturating_add_signed(d)),
             Action::SpaceAt(n) => self.switch_space(n),
             Action::MoveToSpace(d) => self.move_to_space(self.spaces.active.saturating_add_signed(d)),
+            Action::Vt(n) => {
+                if let Some(switch) = self.vt_switch.as_mut() {
+                    switch(n);
+                }
+            }
             Action::Spawn(cmd) => self.spawn(cmd),
         }
     }
@@ -177,6 +187,9 @@ impl Desk {
         let under = if self.deco_hit(pos).is_some() { None } else { self.surface_under(pos) };
         pointer.motion(self, under, &MotionEvent { location: pos, serial: SERIAL_COUNTER.next_serial(), time });
         pointer.frame(self);
+        if self.draws_cursor {
+            self.redraw();
+        }
         let hovered = self.lights_hovered(pos);
         if hovered != self.hovered_lights {
             self.hovered_lights = hovered;

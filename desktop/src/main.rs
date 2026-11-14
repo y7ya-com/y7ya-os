@@ -1,5 +1,6 @@
 //! y7ya-os desktop: a Wayland compositor with Mac-style windows.
 //!
+//! `y7-desktop --session` is the real desktop, started from the login screen.
 //! `y7-desktop` runs nested in a window inside your current desktop.
 //! `y7-desktop --headless [WxH] [--scale S]` renders offscreen and reads test
 //! commands from stdin (see `backend/headless.rs`).
@@ -42,11 +43,16 @@ fn main() -> anyhow::Result<()> {
             .unwrap_or((1440, 900));
         let scale = value("--scale").and_then(|s| s.parse().ok()).unwrap_or(1.0);
         backend::headless::init(&mut event_loop, &mut desk, size, scale)?;
+    } else if flag("--session").is_some() {
+        after = Some(backend::session::init(&mut event_loop, &mut desk)?);
     } else {
         after = Some(backend::winit::init(&mut event_loop, &mut desk)?);
     }
     println!("WAYLAND_DISPLAY={}", desk.socket_name.to_string_lossy());
     desk.start_xwayland();
+    if flag("--session").is_some() {
+        start_session_services(&desk);
+    }
     if let Some(cmd) = value("-c") {
         desk.spawn(&cmd);
     }
@@ -60,4 +66,30 @@ fn main() -> anyhow::Result<()> {
         let _ = desk.display_handle.flush_clients();
     })?;
     Ok(())
+}
+
+/// Makes the session visible to the rest of the system and starts the
+/// desktop's own background pieces.
+fn start_session_services(desk: &Desk) {
+    // Safety: still single-threaded here; nothing else reads the environment yet.
+    unsafe {
+        std::env::set_var("WAYLAND_DISPLAY", &desk.socket_name);
+        std::env::set_var("XDG_CURRENT_DESKTOP", "y7ya-os");
+        std::env::set_var("XDG_SESSION_DESKTOP", "y7ya-os");
+        std::env::set_var("XDG_SESSION_TYPE", "wayland");
+        if let Some(display) = &desk.x_display {
+            std::env::set_var("DISPLAY", display);
+        }
+    }
+    let vars = ["WAYLAND_DISPLAY", "XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP", "XDG_SESSION_TYPE", "DISPLAY"];
+    // So portals, D-Bus-activated apps and user services find this display.
+    let _ = std::process::Command::new("dbus-update-activation-environment").arg("--systemd").args(vars).status();
+    let _ = std::process::Command::new("systemctl").args(["--user", "import-environment"]).args(vars).status();
+    for cmd in ["y7-syncd", "y7-shell", "clipboard --daemon"] {
+        let program = cmd.split_whitespace().next().unwrap_or_default();
+        let installed = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(program).exists()));
+        if installed {
+            desk.spawn(cmd);
+        }
+    }
 }

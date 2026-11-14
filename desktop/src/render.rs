@@ -36,7 +36,7 @@ const OPEN_ANIM: Duration = Duration::from_millis(220);
 const SHADOW_MARGIN: i32 = 120;
 const ACCENT: [f32; 4] = [0.039, 0.518, 1.0, 1.0];
 
-type Moved<E> = RelocateRenderElement<RescaleRenderElement<E>>;
+pub type Moved<E> = RelocateRenderElement<RescaleRenderElement<E>>;
 
 smithay::backend::renderer::element::render_elements! {
     pub DeskElement<=GlesRenderer>;
@@ -319,6 +319,11 @@ pub fn app_id_and_title(window: &Window) -> (String, String) {
             })
         })
         .unwrap_or_default()
+}
+
+/// Wraps an element so it fits `DeskElement` without moving it.
+pub fn unmoved<E: Element>(e: E, scale: f64) -> Moved<E> {
+    Xf::identity().wrap(e, scale)
 }
 
 struct Ctx<'a> {

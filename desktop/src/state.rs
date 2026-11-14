@@ -105,6 +105,12 @@ pub struct Desk {
     pub needs_redraw: bool,
     /// The X11 display served by xwayland-satellite, for X11-only apps.
     pub x_display: Option<String>,
+    /// What the pointer looks like (a client's surface or a named cursor).
+    pub cursor_status: smithay::input::pointer::CursorImageStatus,
+    /// Whether we draw the pointer ourselves (true in the real session).
+    pub draws_cursor: bool,
+    /// Switches virtual terminals (only in the real session).
+    pub vt_switch: Option<Box<dyn FnMut(i32)>>,
 }
 
 impl Desk {
@@ -178,6 +184,9 @@ impl Desk {
             last_title_click: None,
             needs_redraw: true,
             x_display: None,
+            cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
+            draws_cursor: false,
+            vt_switch: None,
         }
     }
 
@@ -397,6 +406,11 @@ impl Desk {
             (x.max(out.loc.x), y.max(out.loc.y + TITLEBAR_H)).into()
         });
         self.space.map_element(window.clone(), loc, true);
+    }
+
+    /// Tells clients which pixel formats shared-memory buffers may use.
+    pub fn shm_formats(&mut self, formats: impl IntoIterator<Item = smithay::reexports::wayland_server::protocol::wl_shm::Format>) {
+        self.shm_state.update_formats(formats);
     }
 
     /// Starts xwayland-satellite (if installed) so X11-only apps can run.

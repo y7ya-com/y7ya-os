@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=y7ya-os
+Comment=A Mac-inspired desktop
+Exec=y7ya-os-session
+TryExec=y7ya-os-session
+Type=Application
+DesktopNames=y7ya-os

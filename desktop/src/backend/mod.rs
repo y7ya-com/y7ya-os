@@ -1,4 +1,5 @@
 pub mod headless;
+pub mod session;
 pub mod winit;
 
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};

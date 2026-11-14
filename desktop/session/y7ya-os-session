@@ -1,0 +1,10 @@
+#!/bin/sh
+# Starts the y7ya-os desktop from the login screen.
+export PATH="$HOME/.local/bin:$PATH"
+export XDG_CURRENT_DESKTOP=y7ya-os
+export XDG_SESSION_DESKTOP=y7ya-os
+export XDG_SESSION_TYPE=wayland
+export QT_QPA_PLATFORM=wayland
+export MOZ_ENABLE_WAYLAND=1
+mkdir -p "$HOME/.local/state/y7ya-os"
+exec y7-desktop --session >"$HOME/.local/state/y7ya-os/session.log" 2>&1

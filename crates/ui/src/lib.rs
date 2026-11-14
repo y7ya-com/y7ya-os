@@ -7,6 +7,7 @@ mod cx;
 mod element;
 mod geom;
 mod input;
+pub mod layer;
 mod platform;
 mod renderer;
 mod scene;
@@ -17,6 +18,9 @@ pub use cx::{Cx, Waker};
 pub use element::{AnyElement, Div, ElementId, Styled, canvas, div, eid, input, text};
 pub use geom::{Bounds, Color, Point, pt, rgb, rgba};
 pub use input::{KeyPress, TextInput};
+#[cfg(target_os = "linux")]
+pub use layer::run_layer;
+pub use layer::{LayerOptions, snapshot_layer};
 pub use platform::{WindowButton, is_y7ya, window_button_layout};
 pub use scene::Scene;
 pub use text::{TextStyle, Weight};

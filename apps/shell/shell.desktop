@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=y7ya-os Shell
+Comment=Menu bar, Spotlight, Control Center and notifications
+Exec=y7-shell
+Icon=preferences-desktop
+Terminal=false
+NoDisplay=true
+OnlyShowIn=y7ya-os;
+X-KDE-autostart-phase=1

@@ -143,6 +143,8 @@ pub struct Desk {
     pub settings_watcher: Option<settings::Watcher>,
     /// Running in a window inside another desktop.
     pub nested: bool,
+    /// Super is down and nothing else has been pressed since.
+    pub super_alone: bool,
     pub wallpaper_path: String,
     pub wallpaper: Option<std::sync::Arc<crate::config::WallpaperImage>>,
 }
@@ -229,6 +231,7 @@ impl Desk {
             vt_switch: None,
             settings_watcher: None,
             nested: false,
+            super_alone: false,
             wallpaper_path: String::new(),
             wallpaper: None,
         }

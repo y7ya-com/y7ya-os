@@ -92,6 +92,13 @@ impl Desk {
             // In a window inside another desktop, that desktop grabs most Super
             // shortcuts, so Ctrl+Alt works as Super too.
             let command = mods.logo || (_desk.nested && mods.ctrl && mods.alt);
+            let is_super = matches!(sym.raw(), keysyms::KEY_Super_L | keysyms::KEY_Super_R);
+            // Super pressed and released on its own opens Start, as on Windows.
+            if state == KeyState::Pressed {
+                _desk.super_alone = is_super;
+            } else if is_super && std::mem::take(&mut _desk.super_alone) && !switching {
+                return FilterResult::Intercept(Action::Spawn("y7-shell msg start"));
+            }
             if state != KeyState::Pressed {
                 // Letting go of Super picks the window in the switcher.
                 let super_key = matches!(
@@ -111,6 +118,9 @@ impl Desk {
             }
             if mods.ctrl && mods.alt && sym.raw() == keysyms::KEY_BackSpace {
                 return FilterResult::Intercept(Action::Quit);
+            }
+            if mods.ctrl && !mods.alt && !mods.shift && sym.raw() == keysyms::KEY_Escape {
+                return FilterResult::Intercept(Action::Spawn("y7-shell msg start"));
             }
             // Task Manager on the Windows shortcut, as requested.
             if mods.ctrl && mods.shift && sym.raw() == keysyms::KEY_Escape {
@@ -209,6 +219,7 @@ impl Desk {
         let pos = pointer.current_location();
         let serial = SERIAL_COUNTER.next_serial();
         let event = ButtonEvent { button, state, serial, time };
+        self.super_alone = false;
         if self.mc_open() {
             if state == ButtonState::Pressed {
                 self.mc_click(pos);

@@ -1,0 +1,11 @@
+[package]
+name = "reminders"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = { workspace = true }
+reminders-core = { path = "../../crates/reminders-core" }
+sync-ui = { path = "../../crates/sync-ui" }
+ui = { path = "../../crates/ui" }
+y7-sync = { path = "../../crates/y7-sync" }

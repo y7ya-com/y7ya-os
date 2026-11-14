@@ -92,6 +92,7 @@ pub struct Desk {
     pub seat: Seat<Desk>,
     /// A layer surface (like Spotlight) holding the keyboard.
     pub layer_focus: Option<WlSurface>,
+    pub foreign_toplevels: crate::foreign_toplevel::ForeignToplevels,
 
     pub output: Option<Output>,
     pub dark: bool,
@@ -142,7 +143,7 @@ impl Desk {
 
         Desk {
             start: Instant::now(),
-            display_handle: dh,
+            display_handle: dh.clone(),
             loop_handle,
             loop_signal,
             socket_name,
@@ -164,6 +165,7 @@ impl Desk {
             dmabuf: None,
             seat,
             layer_focus: None,
+            foreign_toplevels: crate::foreign_toplevel::ForeignToplevels::init(&dh),
             output: None,
             dark: detect_dark(),
             hovered_lights: None,

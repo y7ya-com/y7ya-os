@@ -2,7 +2,8 @@
 //! tests and screenshots without touching a real screen.
 //!
 //! Commands, one per line: `spawn <cmd>`, `move <x> <y>`, `click <x> <y>`,
-//! `down`, `up`, `key <mods+key>` (e.g. `key super+m`), `shot <file.png>`, `quit`.
+//! `down`, `up`, `key <mods+key>` (e.g. `key super+m`), `type <text>` (US layout),
+//! `shot <file.png>`, `quit`.
 
 use std::cell::RefCell;
 use std::io::BufRead;
@@ -94,6 +95,12 @@ pub fn init(event_loop: &mut EventLoop<'static, Desk>, desk: &mut Desk, size: (i
                 Some("down") => desk.pointer_button(BTN_LEFT, ButtonState::Pressed, time),
                 Some("up") => desk.pointer_button(BTN_LEFT, ButtonState::Released, time),
                 Some("key") => press_combo(desk, parts.get(1).copied().unwrap_or(""), time),
+                Some("type") => {
+                    let text = line.trim_start().strip_prefix("type").unwrap_or("").strip_prefix(' ').unwrap_or("");
+                    for (i, ch) in text.chars().enumerate() {
+                        type_char(desk, ch, time + i as u32 * 2);
+                    }
+                }
                 Some("quit") => desk.loop_signal.stop(),
                 Some("shot") => {
                     let path = parts.get(1).copied().unwrap_or("shot.png");
@@ -150,6 +157,22 @@ fn press_combo(desk: &mut Desk, combo: &str, time: u32) {
     }
 }
 
+/// Types one character as a US keyboard would (Shift for capitals and symbols).
+fn type_char(desk: &mut Desk, ch: char, time: u32) {
+    const SHIFTED: &[(char, char)] = &[
+        ('!', '1'), ('@', '2'), ('#', '3'), ('$', '4'), ('%', '5'), ('^', '6'), ('&', '7'), ('*', '8'), ('(', '9'),
+        (')', '0'), ('_', '-'), ('+', '='), ('{', '['), ('}', ']'), (':', ';'), ('"', '\''), ('~', '`'), ('|', '\\'),
+        ('<', ','), ('>', '.'), ('?', '/'),
+    ];
+    let (base, shift) = match SHIFTED.iter().find(|(s, _)| *s == ch) {
+        Some(&(_, b)) => (b, true),
+        None if ch.is_ascii_uppercase() => (ch.to_ascii_lowercase(), true),
+        None => (ch, false),
+    };
+    let name = if base == ' ' { "space".to_string() } else { base.to_string() };
+    press_combo(desk, &if shift { format!("shift+{name}") } else { name }, time);
+}
+
 fn evdev_code(name: &str) -> Option<u32> {
     Some(match name.to_lowercase().as_str() {
         "super" | "logo" => 125,
@@ -161,13 +184,19 @@ fn evdev_code(name: &str) -> Option<u32> {
         "space" => 57,
         "backspace" => 14,
         "esc" => 1,
+        "up" => 103,
+        "down" => 108,
+        "left" => 105,
+        "right" => 106,
         k if k.len() == 1 => {
             let c = k.as_bytes()[0];
             const ROW: &[(u8, u32)] = &[
                 (b'q', 16), (b'w', 17), (b'e', 18), (b'r', 19), (b't', 20), (b'y', 21), (b'u', 22), (b'i', 23),
                 (b'o', 24), (b'p', 25), (b'a', 30), (b's', 31), (b'd', 32), (b'f', 33), (b'g', 34), (b'h', 35),
                 (b'j', 36), (b'k', 37), (b'l', 38), (b'z', 44), (b'x', 45), (b'c', 46), (b'v', 47), (b'b', 48),
-                (b'n', 49), (b'm', 50),
+                (b'n', 49), (b'm', 50), (b'1', 2), (b'2', 3), (b'3', 4), (b'4', 5), (b'5', 6), (b'6', 7),
+                (b'7', 8), (b'8', 9), (b'9', 10), (b'0', 11), (b'-', 12), (b'=', 13), (b'[', 26), (b']', 27),
+                (b';', 39), (b'\'', 40), (b'`', 41), (b'\\', 43), (b',', 51), (b'.', 52), (b'/', 53),
             ];
             ROW.iter().find(|(k, _)| *k == c)?.1
         }

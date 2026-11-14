@@ -483,4 +483,8 @@ pub fn send_frames(desk: &Desk) {
     for window in desk.space.elements() {
         window.send_frame(&output, time, Some(Duration::ZERO), |_, _| Some(output.clone()));
     }
+    // The menu bar and panels too, or they'd stall waiting to present.
+    for layer in layer_map_for_output(&output).layers() {
+        layer.send_frame(&output, time, Some(Duration::ZERO), |_, _| Some(output.clone()));
+    }
 }

@@ -6,6 +6,7 @@
 //! `-c <command>` starts a program once the desktop is up.
 
 mod backend;
+mod foreign_toplevel;
 mod grabs;
 mod handlers;
 mod input;
@@ -51,6 +52,7 @@ fn main() -> anyhow::Result<()> {
         if let Some(after) = after.as_mut() {
             after(desk);
         }
+        desk.refresh_foreign_toplevels();
         // Send replies to clients after every round of requests.
         let _ = desk.display_handle.flush_clients();
     })?;

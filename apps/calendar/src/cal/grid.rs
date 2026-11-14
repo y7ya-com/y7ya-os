@@ -14,6 +14,8 @@ use super::{CalendarApp, DragKind, icons, today};
 /// Width of the hour labels on the left.
 pub const GUTTER: f32 = 56.0;
 const ALL_DAY_ROW: f32 = 20.0;
+/// Hour labels this close to the current time's label make way for it.
+const NOW_LABEL_CLEARANCE: f32 = 18.0;
 
 impl CalendarApp {
     pub(super) fn grid_view(&self, cx: &Cx, t: &Theme) -> Div<Self> {
@@ -58,9 +60,9 @@ impl CalendarApp {
                     .rounded(6.0)
                     .bg(t.red)
                     .items_center()
-                    .child(text(d.day().to_string()).size(13.0).weight(Weight::Semibold).color(Color::WHITE))
+                    .child(text(d.day().to_string()).size(13.0).weight(Weight::Semibold).tabular().color(Color::WHITE))
             } else {
-                div().child(text(d.day().to_string()).size(13.0).weight(Weight::Medium))
+                div().child(text(d.day().to_string()).size(13.0).weight(Weight::Medium).tabular())
             };
             let label = text(d.format("%a").to_string()).size(13.0).color(if d == today { t.red } else { t.text_secondary });
             row = row.child(
@@ -148,7 +150,7 @@ impl CalendarApp {
                     .pr(8.0)
                     .flex_row()
                     .justify_end()
-                    .child(text("all-day").size(10.5).color(t.text_secondary)),
+                    .child(text("all-day").size(11.0).color(t.text_secondary)),
             )
             .child(bars)
     }
@@ -160,7 +162,7 @@ impl CalendarApp {
         let mut g = div().w(GUTTER).h(24.0 * HOUR_H).shrink_0();
         for h in 0..24u32 {
             let y = h as f32 * HOUR_H;
-            if now_y.is_some_and(|ny| (ny - y).abs() < 12.0) {
+            if now_y.is_some_and(|ny| (ny - y).abs() < NOW_LABEL_CLEARANCE) {
                 continue;
             }
             g = g.child(
@@ -169,7 +171,7 @@ impl CalendarApp {
                     .w(GUTTER - 8.0)
                     .flex_row()
                     .justify_end()
-                    .child(text(hour_label(h)).size(10.5).color(t.text_secondary)),
+                    .child(text(hour_label(h)).size(11.0).tabular().color(t.text_secondary)),
             );
         }
         if let Some(y) = now_y {
@@ -177,10 +179,10 @@ impl CalendarApp {
             g = g.child(
                 div()
                     .absolute(0.0, y - 7.0)
-                    .w(GUTTER - 6.0)
+                    .w(GUTTER - 8.0)
                     .flex_row()
                     .justify_end()
-                    .child(text(label).size(10.5).weight(Weight::Semibold).color(t.red)),
+                    .child(text(label).size(11.0).weight(Weight::Semibold).tabular().color(t.red)),
             );
         }
         g
@@ -323,7 +325,7 @@ impl CalendarApp {
                     .flex_row()
                     .gap(5.0)
                     .child(text(ev.title.clone()).size(11.0).weight(Weight::Semibold).color(ink).truncate())
-                    .child(text(time).size(11.0).color(ink.alpha(0.8)).shrink_0()),
+                    .child(text(time).size(11.0).tabular().color(ink.alpha(0.8)).shrink_0()),
             );
         } else {
             // Titles wrap only where there's room to show the time below them.
@@ -338,7 +340,7 @@ impl CalendarApp {
                     .flex_row()
                     .items_center()
                     .gap(3.0)
-                    .child(text(time).size(11.0).color(ink.alpha(0.8)))
+                    .child(text(time).size(11.0).tabular().color(ink.alpha(0.8)))
                     .child_if(repeat, || {
                         let c = ink.alpha(0.8);
                         canvas(move |sc, b| icons::repeat(sc, b, c)).size(11.0).into()

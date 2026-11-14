@@ -39,8 +39,8 @@ impl CalendarApp {
 
         let f = &self.fields;
         let times = |date_id: &'static str, date: &Rc<RefCell<TextInput>>, time_id: &'static str, time: &Rc<RefCell<TextInput>>| {
-            let row = div().flex_row().gap(6.0).child(field(date_id, date, 88.0, t));
-            if all_day { row } else { row.child(field(time_id, time, 76.0, t)) }
+            let row = div().flex_row().gap(6.0).child(field(date_id, date, 88.0, cx, t));
+            if all_day { row } else { row.child(field(time_id, time, 76.0, cx, t)) }
         };
         let repeat = ev.rule().map_or("None".to_string(), |r| r.describe());
         let ink = t.text_secondary;
@@ -55,7 +55,7 @@ impl CalendarApp {
                 .items_center()
                 .gap(6.0)
                 .bg(t.field)
-                .hover_bg(t.icon_hover_bg)
+                .hover_bg(Self::hover_fill(id, cx, t))
                 .on_mouse_down(move |s: &mut Self, cx: &mut Cx| open(s, cx))
                 .children(dot.map(|c| div().size(10.0).rounded(5.0).bg(c)))
                 .child(text(value).size(12.0))
@@ -106,7 +106,7 @@ impl CalendarApp {
                         .px(10.0)
                         .rounded(5.0)
                         .items_center()
-                        .hover_bg(t.hover)
+                        .hover_bg(Self::hover_fill("ed-delete", cx, t))
                         .on_click(|s: &mut Self, cx: &mut Cx| {
                             if let Some(id) = s.editor.as_ref().map(|e| e.event) {
                                 s.delete_event(id, cx);
@@ -129,14 +129,15 @@ impl CalendarApp {
     }
 }
 
-/// A small text field (dates and times).
-fn field(id: &'static str, state: &Rc<RefCell<TextInput>>, w: f32, t: &Theme) -> Div<CalendarApp> {
+/// A small text field (dates and times), with a focus ring while typing in it.
+fn field(id: &'static str, state: &Rc<RefCell<TextInput>>, w: f32, cx: &Cx, t: &Theme) -> Div<CalendarApp> {
     div()
         .w(w)
         .h(22.0)
         .px(6.0)
         .rounded(5.0)
         .bg(t.field)
+        .focus_ring(cx.is_focused(id), cx)
         .flex_row()
         .items_center()
         .cursor(CursorIcon::Text)

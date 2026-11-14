@@ -81,7 +81,7 @@ impl CalendarApp {
         if is_today {
             num = num.bg(t.red);
         }
-        let num = num.child(text(label).size(12.5).weight(if is_today { Weight::Semibold } else { Weight::Regular }).color(num_color));
+        let num = num.child(text(label).size(12.5).weight(if is_today { Weight::Semibold } else { Weight::Regular }).tabular().color(num_color));
 
         let fits = (((h - 30.0) / LINE_H).floor() as usize).max(1);
         let shown = if occs.len() > fits { fits - 1 } else { occs.len() };
@@ -100,7 +100,7 @@ impl CalendarApp {
                         s.go_to(d, cx);
                         s.set_view(View::Day, cx);
                     })
-                    .child(text(format!("{} more", occs.len() - shown)).size(11.0).weight(Weight::Medium).color(t.text_secondary)),
+                    .child(text(format!("{} more", occs.len() - shown)).size(11.0).weight(Weight::Medium).tabular().color(t.text_secondary)),
             );
         }
         div()
@@ -167,7 +167,7 @@ impl CalendarApp {
         let line = if selected { line.bg(c) } else { line };
         line.child(div().size(7.0).rounded(3.5).shrink_0().bg(if selected { Color::WHITE } else { c }))
             .child(text(ev.title.clone()).size(11.0).color(title_c).truncate().flex_1())
-            .child(text(time).size(10.5).color(time_c).shrink_0())
+            .child(text(time).size(11.0).tabular().color(time_c).shrink_0())
     }
 
     pub(super) fn year_view(&self, cx: &Cx, t: &Theme) -> Div<Self> {
@@ -251,7 +251,7 @@ impl CalendarApp {
                             s.go_to(d, cx);
                             s.set_view(View::Day, cx);
                         })
-                        .child(dot.child(text(d.day().to_string()).size(11.0).weight(if is_today { Weight::Semibold } else { Weight::Regular }).color(color))),
+                        .child(dot.child(text(d.day().to_string()).size(11.0).weight(if is_today { Weight::Semibold } else { Weight::Regular }).tabular().color(color))),
                 );
             }
             grid = grid.child(row);

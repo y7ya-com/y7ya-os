@@ -12,7 +12,7 @@ const SIZE: (f32, f32) = (1280.0, 800.0);
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    // `calendar --snapshot out.png [--light] [--view day|week|month|year] [--popover]`
+    // `calendar --snapshot out.png [--light] [--view day|week|month|year] [--popover] [--menu]`
     // renders sample data offscreen.
     if let Some(i) = args.iter().position(|a| a == "--snapshot") {
         let path = std::path::PathBuf::from(args.get(i + 1).expect("--snapshot needs a path"));
@@ -24,11 +24,15 @@ fn main() {
             _ => View::Week,
         };
         let popover = args.iter().any(|a| a == "--popover");
+        let menu = args.iter().any(|a| a == "--menu");
         let store = cal::model::demo_store(today());
         ui::snapshot(SIZE, 2.0, dark, &path, |cx| CalendarApp::new(store, None, cx), |app, cx| {
             app.set_view(view, cx);
             if popover {
                 app.preview_popover(cx);
+            }
+            if menu {
+                app.preview_menu(cx);
             }
         });
         return;

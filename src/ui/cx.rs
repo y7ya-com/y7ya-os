@@ -34,7 +34,20 @@ pub struct Cx {
     pub(crate) ime_area: Option<Bounds>,
     pub(crate) commands: Vec<WindowCommand>,
     pub(crate) redraw: bool,
+    pub(crate) waker: Waker,
     scroll: HashMap<ElementId, f32>,
+}
+
+/// Wakes the UI thread from another thread; the app's `on_external` runs.
+#[derive(Clone, Default)]
+pub struct Waker(pub(crate) Option<winit::event_loop::EventLoopProxy<()>>);
+
+impl Waker {
+    pub fn wake(&self) {
+        if let Some(proxy) = &self.0 {
+            let _ = proxy.send_event(());
+        }
+    }
 }
 
 impl Cx {
@@ -54,8 +67,13 @@ impl Cx {
             ime_area: None,
             commands: Vec::new(),
             redraw: false,
+            waker: Waker::default(),
             scroll: HashMap::new(),
         }
+    }
+
+    pub fn waker(&self) -> Waker {
+        self.waker.clone()
     }
 
     pub fn focus(&mut self, id: impl Hash) {

@@ -1,13 +1,17 @@
 mod icons;
 pub mod model;
+pub mod sync;
 mod theme;
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::ui::*;
 use model::{DEFAULT_FOLDER, Folder, Note, Store, full_date, list_date, now, section};
+use notes_core::Status;
+use sync::SyncEvents;
 use theme::Theme;
 
 const SIDEBAR_W: f32 = 220.0;
@@ -15,6 +19,9 @@ const LIST_W: f32 = 300.0;
 const TOOLBAR_H: f32 = 48.0;
 const SAVE_DELAY: Duration = Duration::from_millis(600);
 const PURGE_AFTER_SECS: i64 = 30 * 24 * 3600;
+/// How long a pairing code stays valid (matches the core).
+const PAIRING_TTL: Duration = Duration::from_secs(10 * 60);
+const GREEN: u32 = 0x34c759;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum View {
@@ -45,6 +52,13 @@ struct Menu {
     items: Vec<MenuItem>,
 }
 
+/// The "Sync with Phone" sheet. It shows a pairing code while open.
+struct SyncDialog {
+    /// Devices paired before the sheet opened, to spot the new one.
+    known: Vec<String>,
+    opened: Instant,
+}
+
 pub struct NotesApp {
     store: Store,
     view: View,
@@ -60,12 +74,21 @@ pub struct NotesApp {
     dirty_since: Option<Instant>,
     /// Window buttons for the left and right ends of the header, from KDE settings.
     buttons: (Vec<WindowButton>, Vec<WindowButton>),
+    events: Option<Arc<SyncEvents>>,
+    sync_dialog: Option<SyncDialog>,
 }
 
 impl NotesApp {
-    pub fn new(mut store: Store, cx: &mut Cx) -> Self {
+    pub fn new(mut store: Store, events: Option<Arc<SyncEvents>>, cx: &mut Cx) -> Self {
         let cutoff = now() - PURGE_AFTER_SECS;
+        let before = store.notes.len();
         store.notes.retain(|n| n.deleted_at.is_none_or(|t| t > cutoff));
+        if store.notes.len() != before {
+            store.save();
+        }
+        if let Some(events) = &events {
+            events.set_waker(cx.waker());
+        }
 
         let fonts = &mut cx.text.fonts;
         let mut editor = TextInput::new(fonts, TextStyle::default(), false);
@@ -89,6 +112,8 @@ impl NotesApp {
             menu: None,
             dirty_since: None,
             buttons: window_button_layout(),
+            events,
+            sync_dialog: None,
         };
         app.ensure_selection(cx);
         cx.focus("list");
@@ -103,12 +128,64 @@ impl NotesApp {
         self.dirty_since.get_or_insert_with(Instant::now);
     }
 
-    fn save(&mut self) {
-        if self.dirty_since.take().is_some() {
-            if let Err(e) = self.store.save() {
-                eprintln!("notes: failed to save: {e}");
+    fn save(&mut self, cx: &mut Cx) {
+        if self.dirty_since.take().is_some() && self.store.save() {
+            self.after_reload(cx);
+        }
+    }
+
+    /// The store picked up edits from another device: bring the UI in line.
+    fn after_reload(&mut self, cx: &mut Cx) {
+        if let Some(id) = self.editor_note {
+            match self.store.note(id) {
+                Some(n) if self.editor.borrow().text() != n.body => {
+                    let body = n.body.clone();
+                    self.editor.borrow_mut().replace_text(&mut cx.text.fonts, &body);
+                }
+                Some(_) => {}
+                None => {
+                    self.selected = None;
+                    self.editor_note = None;
+                }
             }
         }
+        if let View::Folder(f) = self.view {
+            if !self.store.folders.iter().any(|x| x.id == f) {
+                self.view = View::Folder(DEFAULT_FOLDER);
+            }
+        }
+        if self.renaming.is_some_and(|id| !self.store.folders.iter().any(|f| f.id == id)) {
+            self.renaming = None;
+        }
+        self.ensure_selection(cx);
+    }
+
+    fn sync_status(&self) -> Status {
+        self.store.core.as_ref().map(|c| c.sync().status()).unwrap_or_default()
+    }
+
+    /// For previews: blocks until the pairing code is ready.
+    pub fn wait_for_pairing_code(&self) {
+        let start = Instant::now();
+        while self.sync_status().pairing_code.is_none() && start.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    pub fn open_sync(&mut self) {
+        self.menu = None;
+        let known = self.sync_status().peers.into_iter().map(|p| p.id).collect();
+        if let Some(core) = &self.store.core {
+            core.sync().start_pairing();
+        }
+        self.sync_dialog = Some(SyncDialog { known, opened: Instant::now() });
+    }
+
+    fn close_sync(&mut self) {
+        if let Some(core) = &self.store.core {
+            core.sync().cancel_pairing();
+        }
+        self.sync_dialog = None;
     }
 
     // -- queries ------------------------------------------------------------
@@ -502,7 +579,205 @@ impl NotesApp {
             .bg(t.sidebar)
             .child(header)
             .child(div().id("sidebar-scroll").scroll_y().flex_1().flex_col().px(10.0).gap(1.0).children(rows))
+            .child(self.sync_row(t))
             .child(new_folder)
+    }
+
+    /// Which phone this computer syncs with, or an invitation to set it up.
+    fn sync_row(&self, t: &Theme) -> Div<Self> {
+        let status = self.sync_status();
+        let accent = t.accent;
+        let (label, detail, connected) = match status.peers.first() {
+            None => ("Sync with Phone".to_string(), None, false),
+            Some(p) => {
+                let detail = if p.connected {
+                    "Connected".to_string()
+                } else if let Some(ts) = p.last_sync {
+                    format!("Synced {}", sync::ago(ts))
+                } else {
+                    "Not connected".to_string()
+                };
+                (p.name.clone(), Some(detail), p.connected)
+            }
+        };
+        div()
+            .id("sync-row")
+            .mx(10.0)
+            .h(40.0)
+            .shrink_0()
+            .px(8.0)
+            .rounded(6.0)
+            .flex_row()
+            .items_center()
+            .gap(8.0)
+            .cursor(CursorIcon::Pointer)
+            .hover_bg(t.hover)
+            .on_click(|s: &mut Self, _: &mut Cx| s.open_sync())
+            .child(canvas(move |s, b| icons::phone(s, b, accent)).size(18.0).shrink_0())
+            .child(
+                div()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .child(text(label).truncate())
+                    .child_if(detail.is_some(), || {
+                        text(detail.clone().unwrap_or_default()).size(11.0).color(t.text_secondary).truncate().into()
+                    }),
+            )
+            .child_if(connected, || div().size(7.0).rounded(3.5).bg(rgb(GREEN)).shrink_0().into())
+    }
+
+    fn sync_sheet(&self, dialog: &SyncDialog, cx: &Cx, t: &Theme) -> Div<Self> {
+        let status = self.sync_status();
+        let new_peer = status.peers.iter().find(|p| !dialog.known.contains(&p.id));
+        let secondary = t.text_secondary;
+
+        let code_box = div().size(232.0).rounded(14.0).items_center().justify_center().flex_col().gap(10.0);
+        let code_box = match (new_peer, &status.pairing_code) {
+            (Some(p), _) => code_box
+                .bg(t.field)
+                .child(
+                    div()
+                        .size(56.0)
+                        .rounded(28.0)
+                        .bg(rgb(GREEN))
+                        .items_center()
+                        .justify_center()
+                        .child(canvas(|s, b| icons::check(s, b, Color::WHITE, 3.0)).size(32.0)),
+                )
+                .child(text(format!("Paired with {}", p.name)).size(14.0).weight(Weight::Semibold)),
+            (None, Some(code)) => {
+                let code = code.clone();
+                code_box.bg(Color::WHITE).child(canvas(move |s, b| sync::draw_qr(s, b, &code, rgb(0x000000))).size(204.0))
+            }
+            (None, None) if dialog.opened.elapsed() >= PAIRING_TTL => code_box
+                .bg(t.field)
+                .child(text("This code expired").color(secondary))
+                .child(
+                    div()
+                        .id("sync-new-code")
+                        .h(28.0)
+                        .px(14.0)
+                        .rounded(7.0)
+                        .items_center()
+                        .border(t.menu_border, 1.0)
+                        .hover_bg(t.hover)
+                        .on_click(|s: &mut Self, _: &mut Cx| {
+                            s.close_sync();
+                            s.open_sync();
+                        })
+                        .child(text("Show New Code")),
+                ),
+            (None, None) => code_box.bg(t.field).child(text("Preparing code\u{2026}").color(secondary)),
+        };
+
+        let mut card = div()
+            .w(420.0)
+            .flex_col()
+            .items_center()
+            .px(28.0)
+            .pt(24.0)
+            .pb(20.0)
+            .gap(14.0)
+            .rounded(12.0)
+            .bg(t.content)
+            .border(t.menu_border, 0.5)
+            .shadow(t.shadow, 30.0, 10.0)
+            .occlude()
+            .child(text("Sync with Your Phone").size(17.0).weight(Weight::Bold))
+            .child(
+                text("Notes syncs directly between your devices. No account and no cloud: notes are end-to-end encrypted and only go to devices you pair.")
+                    .size(12.5)
+                    .line_height(1.4)
+                    .color(secondary)
+                    .w_full(),
+            )
+            .child(code_box)
+            .child_if(new_peer.is_none(), || {
+                div()
+                    .flex_col()
+                    .gap(4.0)
+                    .w_full()
+                    .child(text("On your Android phone, open Notes, tap Sync with Computer, then Scan Code.").size(12.5).line_height(1.4).w_full())
+                    .child(text("The code works once and expires after 10 minutes.").size(11.5).color(secondary).w_full())
+                    .into()
+            });
+
+        if !status.peers.is_empty() {
+            let mut list = div().flex_col().w_full().rounded(8.0).bg(t.field).py(2.0);
+            for p in &status.peers {
+                let id = p.id.clone();
+                let detail = if p.connected {
+                    "Connected".to_string()
+                } else {
+                    p.last_sync.map_or("Not connected yet".to_string(), |ts| format!("Last synced {}", sync::ago(ts)))
+                };
+                let accent = t.accent;
+                list = list.child(
+                    div()
+                        .h(44.0)
+                        .px(12.0)
+                        .flex_row()
+                        .items_center()
+                        .gap(10.0)
+                        .child(canvas(move |s, b| icons::phone(s, b, accent)).size(18.0).shrink_0())
+                        .child(
+                            div()
+                                .flex_col()
+                                .flex_1()
+                                .min_w_0()
+                                .child(text(p.name.clone()).weight(Weight::Semibold).truncate())
+                                .child(text(detail).size(11.0).color(if p.connected { rgb(GREEN) } else { secondary }).truncate()),
+                        )
+                        .child(
+                            div()
+                                .id(("unpair", p.id.clone()))
+                                .h(24.0)
+                                .px(10.0)
+                                .rounded(6.0)
+                                .items_center()
+                                .hover_bg(t.hover)
+                                .on_click(move |s: &mut Self, _: &mut Cx| {
+                                    if let Some(core) = &s.store.core {
+                                        core.sync().unpair(&id);
+                                    }
+                                })
+                                .child(text("Unpair").color(rgb(0xff3b30))),
+                        ),
+                );
+            }
+            card = card.child(
+                div()
+                    .flex_col()
+                    .w_full()
+                    .gap(6.0)
+                    .child(text("PAIRED DEVICES").size(10.5).weight(Weight::Semibold).color(secondary))
+                    .child(list),
+            );
+        }
+
+        card = card.child(
+            div()
+                .id("sync-done")
+                .mt(4.0)
+                .h(30.0)
+                .w(120.0)
+                .rounded(7.0)
+                .bg(t.accent)
+                .items_center()
+                .justify_center()
+                .on_click(|s: &mut Self, _: &mut Cx| s.close_sync())
+                .child(text("Done").color(Color::WHITE).weight(Weight::Semibold)),
+        );
+
+        div()
+            .inset_0()
+            .deferred()
+            .bg(rgba(0x000000, if cx.dark { 0.5 } else { 0.28 }))
+            .items_center()
+            .justify_center()
+            .on_mouse_down(|s: &mut Self, _| s.close_sync())
+            .child(card)
     }
 
     fn folder_row(
@@ -860,6 +1135,9 @@ impl App for NotesApp {
         if let Some(menu) = &self.menu {
             root = root.child(self.menu_overlay(menu, cx, &t));
         }
+        if let Some(dialog) = &self.sync_dialog {
+            root = root.child(self.sync_sheet(dialog, cx, &t));
+        }
         // Frameless windows get no compositor outline, so draw a hairline edge.
         if cx.transparent && !cx.maximized {
             root = root.child(div().inset_0().rounded(cx.window_radius).border(t.window_border, 1.0));
@@ -869,6 +1147,12 @@ impl App for NotesApp {
 
     fn on_key(&mut self, key: &KeyPress, cx: &mut Cx) -> bool {
         let focused_list = cx.is_focused("list");
+        if self.sync_dialog.is_some() {
+            if key.is_named(NamedKey::Escape) || key.is_named(NamedKey::Enter) {
+                self.close_sync();
+            }
+            return true;
+        }
         if key.is_named(NamedKey::Escape) {
             if self.menu.take().is_some() {
             } else if self.renaming.is_some() {
@@ -899,12 +1183,12 @@ impl App for NotesApp {
                 return true;
             }
             if key.is_char('q') || key.is_char('w') {
-                self.save();
+                self.save(cx);
                 cx.close_window();
                 return true;
             }
             if key.is_char('s') {
-                self.save();
+                self.save(cx);
                 return true;
             }
         }
@@ -963,12 +1247,24 @@ impl App for NotesApp {
     }
 
     fn next_wake(&self) -> Option<Instant> {
-        self.dirty_since.map(|t| t + SAVE_DELAY)
+        let save = self.dirty_since.map(|t| t + SAVE_DELAY);
+        // Redraw when a shown pairing code expires.
+        let expiry = self.sync_dialog.as_ref().map(|d| d.opened + PAIRING_TTL + Duration::from_secs(1));
+        save.into_iter().chain(expiry.filter(|t| *t > Instant::now())).min()
     }
 
-    fn on_wake(&mut self, _cx: &mut Cx) {
+    fn on_wake(&mut self, cx: &mut Cx) {
         if self.dirty_since.is_some_and(|t| t.elapsed() >= SAVE_DELAY) {
-            self.save();
+            self.save(cx);
+        }
+    }
+
+    fn on_external(&mut self, cx: &mut Cx) {
+        if self.events.as_ref().is_some_and(|e| e.take_notes_changed()) {
+            // Merge any unsaved typing first, then show the combined result.
+            self.dirty_since = None;
+            self.store.save();
+            self.after_reload(cx);
         }
     }
 
@@ -976,17 +1272,17 @@ impl App for NotesApp {
         if self.selected.and_then(|id| self.store.note(id)).is_some_and(|n| n.is_blank()) {
             let id = self.selected.unwrap();
             self.store.notes.retain(|n| n.id != id);
-            self.mark_dirty();
         }
-        self.save();
+        self.store.save();
+        if let Some(core) = &self.store.core {
+            core.sync().shutdown();
+        }
     }
 }
 
 /// Sample content for `--snapshot` renders.
 pub fn demo_store() -> Store {
-    let mut s = Store::load(std::path::PathBuf::from("/nonexistent/notes.json"));
-    s.path = None;
-    s.notes.clear();
+    let mut s = Store::detached();
     s.folders.push(Folder { id: 900, name: "Work".into() });
     s.folders.push(Folder { id: 901, name: "Recipes".into() });
     s.folders.push(Folder { id: 902, name: "Travel".into() });
@@ -1039,7 +1335,7 @@ mod tests {
     fn new_note_typing_and_menu() {
         let path = std::env::temp_dir().join("notes-selftest.png");
         let path = std::env::var_os("NOTES_TEST_PNG").map(std::path::PathBuf::from).unwrap_or(path);
-        crate::ui::snapshot((1180.0, 740.0), 2.0, false, &path, |cx| NotesApp::new(demo_store(), cx), |app, cx| {
+        crate::ui::snapshot((1180.0, 740.0), 2.0, false, &path, |cx| NotesApp::new(demo_store(), None, cx), |app, cx| {
             let before = app.store.count_in(DEFAULT_FOLDER);
             app.new_note(cx);
             assert!(cx.is_focused("editor"));

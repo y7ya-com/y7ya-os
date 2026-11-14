@@ -12,7 +12,7 @@ mod scene;
 mod text;
 
 pub use app::{App, WindowOptions, run, snapshot};
-pub use cx::Cx;
+pub use cx::{Cx, Waker};
 pub use element::{AnyElement, Div, ElementId, Styled, canvas, div, eid, input, text};
 pub use geom::{Bounds, Color, Point, pt, rgb, rgba};
 pub use input::{KeyPress, TextInput};

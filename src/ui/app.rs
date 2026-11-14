@@ -32,6 +32,8 @@ pub trait App: Sized + 'static {
         None
     }
     fn on_wake(&mut self, _cx: &mut Cx) {}
+    /// Another thread called [`Waker::wake`](super::cx::Waker::wake).
+    fn on_external(&mut self, _cx: &mut Cx) {}
     fn on_exit(&mut self) {}
 }
 
@@ -80,6 +82,7 @@ pub fn run<A: App>(opts: WindowOptions, make: impl FnOnce(&mut Cx) -> A + 'stati
         last_click: (Instant::now() - Duration::from_secs(10), Point::default(), 0),
         cursor: CursorIcon::Default,
     };
+    runner.cx.waker = super::cx::Waker(Some(event_loop.create_proxy()));
     event_loop.run_app(&mut runner).expect("run app");
 }
 
@@ -416,6 +419,14 @@ impl<A: App> ApplicationHandler for Runner<A> {
             self.cx.redraw = true;
             self.after_event();
         }
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
+        if let Some(app) = self.app.as_mut() {
+            app.on_external(&mut self.cx);
+        }
+        self.cx.redraw = true;
+        self.after_event();
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {

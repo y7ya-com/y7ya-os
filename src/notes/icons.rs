@@ -87,6 +87,18 @@ pub fn pin(scene: &mut Scene, b: Bounds, color: Color) {
     scene.segment(pt(x + 6.0 * s, y + 6.8 * s), pt(x + 6.0 * s, y + 11.0 * s), 1.2, color);
 }
 
+pub fn phone(scene: &mut Scene, b: Bounds, color: Color) {
+    let (x, y, s) = frame(b, 18.0);
+    outline(scene, x + 4.5 * s, y + 1.5 * s, 9.0 * s, 15.0 * s, 2.2 * s, color, 1.4);
+    scene.segment(pt(x + 7.8 * s, y + 13.8 * s), pt(x + 10.2 * s, y + 13.8 * s), 1.2, color);
+}
+
+pub fn check(scene: &mut Scene, b: Bounds, color: Color, stroke: f32) {
+    let (x, y, s) = frame(b, 18.0);
+    scene.segment(pt(x + 3.5 * s, y + 9.5 * s), pt(x + 7.5 * s, y + 13.5 * s), stroke, color);
+    scene.segment(pt(x + 7.5 * s, y + 13.5 * s), pt(x + 14.5 * s, y + 4.5 * s), stroke, color);
+}
+
 pub fn xmark(scene: &mut Scene, b: Bounds, color: Color, size: f32, stroke: f32) {
     let c = b.center();
     let h = size / 2.0;

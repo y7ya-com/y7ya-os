@@ -1,123 +1,68 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone};
-use serde::{Deserialize, Serialize};
+pub use notes_core::{DEFAULT_FOLDER, Folder, Note, now};
+use notes_core::{Core, Heads};
 
-/// The built-in "Notes" folder; it can't be renamed or deleted.
-pub const DEFAULT_FOLDER: u64 = 0;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Folder {
-    pub id: u64,
-    pub name: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Note {
-    pub id: u64,
-    pub folder: u64,
-    pub body: String,
-    pub created: i64,
-    pub modified: i64,
-    #[serde(default)]
-    pub pinned: bool,
-    #[serde(default)]
-    pub deleted_at: Option<i64>,
-}
-
-impl Note {
-    pub fn title(&self) -> &str {
-        self.body.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("New Note")
-    }
-
-    pub fn preview(&self) -> &str {
-        self.body
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .nth(1)
-            .unwrap_or("No additional text")
-    }
-
-    pub fn is_blank(&self) -> bool {
-        self.body.trim().is_empty()
-    }
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
+/// The notes as the UI sees them: a working copy of the shared notebook.
+/// Edit `folders` and `notes` freely, then `save()` to merge them into the
+/// notebook (and on to paired devices).
+#[derive(Default)]
 pub struct Store {
     pub folders: Vec<Folder>,
     pub notes: Vec<Note>,
-    pub next_id: u64,
-    #[serde(skip)]
-    pub path: Option<PathBuf>,
-}
-
-pub fn now() -> i64 {
-    Local::now().timestamp()
+    /// The notebook version this copy was loaded from.
+    heads: Heads,
+    pub core: Option<Arc<Core>>,
 }
 
 impl Store {
-    pub fn data_path() -> PathBuf {
-        let dir = std::env::var_os("NOTES_DATA_DIR")
+    pub fn data_dir() -> PathBuf {
+        std::env::var_os("NOTES_DATA_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|| dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("notes"));
-        dir.join("notes.json")
+            .unwrap_or_else(|| dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("notes"))
     }
 
-    pub fn load(path: PathBuf) -> Self {
-        let mut store = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<Store>(&s).ok())
-            .unwrap_or_else(Store::first_run);
-        store.path = Some(path);
-        store.ensure_default_folder();
+    pub fn new(core: Arc<Core>) -> Self {
+        let mut store = Store { core: Some(core), ..Default::default() };
+        store.reload();
+        if store.notes.is_empty() && store.folders.len() == 1 && !Self::data_dir().join("peers.json").exists() {
+            store.notes.push(welcome_note());
+            store.save();
+        }
         store
     }
 
-    fn first_run() -> Self {
-        let mut s = Store { next_id: 1, ..Default::default() };
-        s.ensure_default_folder();
-        let id = s.alloc_id();
-        let t = now();
-        s.notes.push(Note {
-            id,
-            folder: DEFAULT_FOLDER,
-            body: "Welcome to Notes\nJot down anything here. The first line becomes the title.\n\n\
-                   • Ctrl+N creates a new note\n• Ctrl+F searches all notes\n• Right-click a note to pin, move or delete it"
-                .into(),
-            created: t,
-            modified: t,
-            pinned: false,
-            deleted_at: None,
-        });
-        s
+    /// An in-memory store that isn't saved (previews and tests).
+    pub fn detached() -> Self {
+        Store { folders: vec![Folder { id: DEFAULT_FOLDER, name: "Notes".into() }], ..Default::default() }
     }
 
-    fn ensure_default_folder(&mut self) {
-        if !self.folders.iter().any(|f| f.id == DEFAULT_FOLDER) {
-            self.folders.insert(0, Folder { id: DEFAULT_FOLDER, name: "Notes".into() });
-        }
-        self.next_id = self.next_id.max(1);
+    /// Takes the notebook's current state, including edits from other devices.
+    pub fn reload(&mut self) {
+        let Some(core) = &self.core else { return };
+        let s = core.snapshot();
+        self.folders = s.folders;
+        self.notes = s.notes;
+        self.heads = s.heads;
+    }
+
+    /// Merges local edits into the notebook. Returns true if edits from
+    /// another device arrived meanwhile, so the store now has new content.
+    pub fn save(&mut self) -> bool {
+        let Some(core) = &self.core else { return false };
+        let heads = core.apply(&self.heads, &self.folders, &self.notes);
+        let s = core.snapshot();
+        let changed = s.folders != self.folders || s.notes != self.notes;
+        self.folders = s.folders;
+        self.notes = s.notes;
+        self.heads = if changed { s.heads } else { heads };
+        changed
     }
 
     pub fn alloc_id(&mut self) -> u64 {
-        let max = self.notes.iter().map(|n| n.id).chain(self.folders.iter().map(|f| f.id)).max().unwrap_or(0);
-        self.next_id = self.next_id.max(max + 1);
-        let id = self.next_id;
-        self.next_id += 1;
-        id
-    }
-
-    /// Writes atomically (temp file + rename) so a crash can't corrupt notes.
-    pub fn save(&self) -> std::io::Result<()> {
-        let Some(path) = &self.path else { return Ok(()) };
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
-        std::fs::rename(tmp, path)
+        notes_core::new_id()
     }
 
     pub fn note(&self, id: u64) -> Option<&Note> {
@@ -146,6 +91,22 @@ impl Store {
             return base.to_string();
         }
         (2..).map(|i| format!("{base} {i}")).find(|n| !taken(n)).unwrap()
+    }
+}
+
+fn welcome_note() -> Note {
+    let t = now();
+    Note {
+        id: notes_core::new_id(),
+        folder: DEFAULT_FOLDER,
+        body: "Welcome to Notes\nJot down anything here. The first line becomes the title.\n\n\
+               • Ctrl+N creates a new note\n• Ctrl+F searches all notes\n• Right-click a note to pin, move or delete it\n\
+               • Sync with Phone (bottom left) pairs your Android phone"
+            .into(),
+        created: t,
+        modified: t,
+        pinned: false,
+        deleted_at: None,
     }
 }
 

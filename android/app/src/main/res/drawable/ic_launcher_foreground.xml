@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Yellow band -->
+    <path
+        android:fillColor="#FFF6C431"
+        android:pathData="M0,0h108v43h-108z" />
+    <path
+        android:fillColor="#FFE2A800"
+        android:pathData="M0,41h108v2h-108z" />
+    <!-- Perforation -->
+    <path
+        android:fillColor="#FFC7C7CC"
+        android:pathData="M21.0,47a1,1 0,1 0,2 0a1,1 0,1 0,-2 0z M26.0,47a1,1 0,1 0,2 0a1,1 0,1 0,-2 0z M31.0,47a1,1 0,1 0,2 0a1,1 0,1 0,-2 0z M36.0,47a1,1 0,1 0,2 0a1,1 0,1 0,-2 0z M41.0,47a1,1 0,1 0,2 0a1,1 0,1 0,-2 0z M46.0,47a1,1 0,1 0,2 0a1,1 0,1 0,-2 0z M51.0,47a1,1 0,1 0,2 0a1,1 0,1 0,-2 0z M56.0,47a1,1 0,1 0,2 0a1,1 0,1 0,-2 0z M61.0,47a1,1 0,1 0,2 0a1,1 0,1 0,-2 0z M66.0,47a1,1 0,1 0,2 0a1,1 0,1 0,-2 0z M71.0,47a1,1 0,1 0,2 0a1,1 0,1 0,-2 0z M76.0,47a1,1 0,1 0,2 0a1,1 0,1 0,-2 0z M81.0,47a1,1 0,1 0,2 0a1,1 0,1 0,-2 0z M86.0,47a1,1 0,1 0,2 0a1,1 0,1 0,-2 0z" />
+    <!-- Ruled lines -->
+    <path
+        android:fillColor="#FFD1D1D6"
+        android:pathData="M18,56h90v1.6h-90z M18,66h90v1.6h-90z M18,76h90v1.6h-90z M18,86h90v1.6h-90z" />
+</vector>

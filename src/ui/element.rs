@@ -248,6 +248,9 @@ pub trait Styled: Sized {
         self.layout_mut().margin.right = LengthPercentageAuto::length(v);
         self
     }
+    fn mx(self, v: f32) -> Self {
+        self.ml(v).mr(v)
+    }
     fn mx_auto(mut self) -> Self {
         let l = self.layout_mut();
         l.margin.left = LengthPercentageAuto::auto();

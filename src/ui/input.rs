@@ -120,6 +120,25 @@ impl TextInput {
         self.redo.clear();
     }
 
+    /// Replaces the text (e.g. after an edit from another device), keeping
+    /// the caret at the same character offset where possible.
+    pub fn replace_text(&mut self, fonts: &mut FontSystem, text: &str) {
+        let offset = self.editor.with_buffer(|b| {
+            let c = self.editor.cursor();
+            b.lines[..c.line.min(b.lines.len())].iter().map(|l| l.text().len() + 1).sum::<usize>() + c.index
+        });
+        let undo = std::mem::take(&mut self.undo);
+        self.set_text(fonts, text);
+        self.undo = undo;
+        let mut offset = offset.min(text.len());
+        while !text.is_char_boundary(offset) {
+            offset -= 1;
+        }
+        let line = text[..offset].matches('\n').count();
+        let index = offset - text[..offset].rfind('\n').map_or(0, |i| i + 1);
+        self.editor.set_cursor(Cursor::new(line, index));
+    }
+
     pub fn move_to_end(&mut self) {
         let end = self.end_cursor();
         self.editor.set_selection(Selection::None);

@@ -1,0 +1,16 @@
+[package]
+name = "notes-ffi"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[dependencies]
+notes-core = { path = "../notes-core" }
+thiserror = "2.0.21"
+uniffi = { version = "0.32.2", features = ["cli"] }

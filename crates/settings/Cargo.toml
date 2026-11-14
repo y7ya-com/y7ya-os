@@ -1,0 +1,11 @@
+[package]
+name = "settings"
+version = "0.1.0"
+edition = "2024"
+description = "The shared y7ya-os settings file (~/.config/y7ya-os/settings.toml): load, save and a live watcher"
+
+[dependencies]
+dirs = { workspace = true }
+libc = "0.2.191"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.2.1"

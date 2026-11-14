@@ -10,7 +10,9 @@ mod input;
 mod platform;
 mod renderer;
 mod scene;
+mod scroll;
 mod text;
+pub mod widgets;
 
 pub use app::{App, WindowOptions, run, snapshot};
 pub use cx::{Cx, Waker};

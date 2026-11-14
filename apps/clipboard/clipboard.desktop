@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Clipboard History
+Comment=Search and paste things you copied earlier
+Exec=clipboard --pick
+Icon=edit-paste
+Terminal=false
+Categories=Utility;
+Keywords=clipboard;paste;history;copy;
+StartupWMClass=clipboard
+X-KDE-Shortcuts=Meta+Shift+V

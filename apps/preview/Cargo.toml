@@ -1,0 +1,8 @@
+[package]
+name = "preview"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+media = { path = "../../crates/media" }
+ui = { path = "../../crates/ui" }

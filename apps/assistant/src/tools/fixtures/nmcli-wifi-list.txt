@@ -1,0 +1,7 @@
+ :Vodafone75DB8D_19:65:WPA2 WPA3
+*:Vodafone75DB8D_19:49:WPA2 WPA3
+ :Vodafone-9C30:27:WPA2 WPA3
+ :Pixel 9 Hotspot:80:WPA2
+ :Café\: Guest:58:
+ ::40:WPA2
+ :SKYUNHVS:12:WPA2

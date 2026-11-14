@@ -3,8 +3,9 @@
 use std::time::{Duration, Instant};
 
 use smithay::backend::input::{
-    AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent, KeyState, KeyboardKeyEvent,
-    PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
+    AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, GestureBeginEvent, GestureEndEvent,
+    GestureSwipeUpdateEvent, InputBackend, InputEvent, KeyState, KeyboardKeyEvent, PointerAxisEvent,
+    PointerButtonEvent, PointerMotionEvent,
 };
 use smithay::input::keyboard::{FilterResult, Keycode, keysyms};
 use smithay::input::pointer::{AxisFrame, ButtonEvent, Focus, GrabStartData, MotionEvent};
@@ -22,7 +23,14 @@ pub enum Action {
     Minimize,
     Unminimize,
     Zoom,
-    NextWindow,
+    Switcher { back: bool },
+    SwitcherCommit,
+    SwitcherCancel,
+    MissionControl,
+    CloseOverlays,
+    Space(isize),
+    SpaceAt(usize),
+    MoveToSpace(isize),
     Spawn(&'static str),
 }
 
@@ -44,6 +52,9 @@ impl Desk {
             InputEvent::PointerButton { event } => {
                 self.pointer_button(event.button_code(), event.state(), event.time_msec());
             }
+            InputEvent::GestureSwipeBegin { event } => self.swipe_begin(event.fingers()),
+            InputEvent::GestureSwipeUpdate { event } => self.swipe_update(event.delta_x(), event.delta_y()),
+            InputEvent::GestureSwipeEnd { event } => self.swipe_end(event.cancelled()),
             InputEvent::PointerAxis { event } => {
                 let source = event.source();
                 let amount = |axis| {
@@ -73,15 +84,25 @@ impl Desk {
     pub fn key(&mut self, code: Keycode, state: KeyState, time: u32) {
         let serial = SERIAL_COUNTER.next_serial();
         let keyboard = self.seat.get_keyboard().unwrap();
-        let action = keyboard.input::<Action, _>(self, code, state, serial, time, |_, mods, handle| {
-            if state != KeyState::Pressed {
-                return FilterResult::Forward;
-            }
+        let action = keyboard.input::<Action, _>(self, code, state, serial, time, |_desk, mods, handle| {
             let sym = handle.modified_sym();
+            let switching = desk_switching(_desk);
+            if state != KeyState::Pressed {
+                // Letting go of Super picks the window in the switcher.
+                let super_key = matches!(sym.raw(), keysyms::KEY_Super_L | keysyms::KEY_Super_R);
+                return if switching && super_key { FilterResult::Intercept(Action::SwitcherCommit) } else { FilterResult::Forward };
+            }
+            if sym.raw() == keysyms::KEY_Escape && (switching || overlays_open(_desk)) {
+                return FilterResult::Intercept(if switching { Action::SwitcherCancel } else { Action::CloseOverlays });
+            }
             // The unshifted key, so Super+Shift+M still reads as "m".
             let lower = handle.raw_latin_sym_or_raw_current_sym().unwrap_or(sym).raw();
             if mods.ctrl && mods.alt && sym.raw() == keysyms::KEY_BackSpace {
                 return FilterResult::Intercept(Action::Quit);
+            }
+            // Task Manager on the Windows shortcut, as requested.
+            if mods.ctrl && mods.shift && sym.raw() == keysyms::KEY_Escape {
+                return FilterResult::Intercept(Action::Spawn("taskmanager"));
             }
             if !mods.logo {
                 return FilterResult::Forward;
@@ -91,9 +112,18 @@ impl Desk {
                 keysyms::KEY_m if mods.shift => Action::Unminimize,
                 keysyms::KEY_m => Action::Minimize,
                 keysyms::KEY_f => Action::Zoom,
-                keysyms::KEY_Tab => Action::NextWindow,
+                keysyms::KEY_Tab | keysyms::KEY_ISO_Left_Tab => Action::Switcher { back: mods.shift },
+                keysyms::KEY_Up => Action::MissionControl,
+                keysyms::KEY_Down => Action::CloseOverlays,
+                keysyms::KEY_Left if mods.shift => Action::MoveToSpace(-1),
+                keysyms::KEY_Right if mods.shift => Action::MoveToSpace(1),
+                keysyms::KEY_Left => Action::Space(-1),
+                keysyms::KEY_Right => Action::Space(1),
+                k @ keysyms::KEY_1..=keysyms::KEY_9 => Action::SpaceAt((k - keysyms::KEY_1) as usize),
+                keysyms::KEY_space => Action::Spawn("y7-shell msg spotlight"),
+                keysyms::KEY_v if mods.shift => Action::Spawn("clipboard --pick"),
                 keysyms::KEY_Return | keysyms::KEY_t => Action::Spawn("konsole"),
-                keysyms::KEY_e => Action::Spawn("dolphin"),
+                keysyms::KEY_e => Action::Spawn("files"),
                 _ => return FilterResult::Forward,
             };
             FilterResult::Intercept(action)
@@ -111,13 +141,21 @@ impl Desk {
             Action::Minimize => focused.iter().for_each(|w| self.minimize(w)),
             Action::Unminimize => self.unminimize_last(),
             Action::Zoom => focused.iter().for_each(|w| self.zoom(w)),
-            Action::NextWindow => {
-                // Raise the bottom-most window: cycles through all of them.
-                let bottom = self.space.elements().next().cloned();
-                if bottom != focused {
-                    self.focus(bottom);
+            Action::Switcher { back } => self.switcher_next(back),
+            Action::SwitcherCommit => self.switcher_commit(),
+            Action::SwitcherCancel => {
+                self.spaces.switcher = None;
+                self.redraw();
+            }
+            Action::MissionControl => self.toggle_mission_control(),
+            Action::CloseOverlays => {
+                if self.mc_open() {
+                    self.close_mission_control(None);
                 }
             }
+            Action::Space(d) => self.switch_space(self.spaces.active.saturating_add_signed(d)),
+            Action::SpaceAt(n) => self.switch_space(n),
+            Action::MoveToSpace(d) => self.move_to_space(self.spaces.active.saturating_add_signed(d)),
             Action::Spawn(cmd) => self.spawn(cmd),
         }
     }
@@ -129,6 +167,13 @@ impl Desk {
             pos.y.clamp(out.loc.y, out.loc.y + out.size.h - 1.0),
         ));
         let pointer = self.seat.get_pointer().unwrap();
+        if self.mc_open() {
+            // Mission Control owns the pointer while it's up.
+            pointer.motion(self, None, &MotionEvent { location: pos, serial: SERIAL_COUNTER.next_serial(), time });
+            pointer.frame(self);
+            self.mc_hover(pos);
+            return;
+        }
         let under = if self.deco_hit(pos).is_some() { None } else { self.surface_under(pos) };
         pointer.motion(self, under, &MotionEvent { location: pos, serial: SERIAL_COUNTER.next_serial(), time });
         pointer.frame(self);
@@ -144,6 +189,12 @@ impl Desk {
         let pos = pointer.current_location();
         let serial = SERIAL_COUNTER.next_serial();
         let event = ButtonEvent { button, state, serial, time };
+        if self.mc_open() {
+            if state == ButtonState::Pressed {
+                self.mc_click(pos);
+            }
+            return;
+        }
 
         if state == ButtonState::Released {
             if let Some((window, b)) = self.pressed.take() {
@@ -202,4 +253,12 @@ impl Desk {
         pointer.button(self, &event);
         pointer.frame(self);
     }
+}
+
+fn desk_switching(desk: &Desk) -> bool {
+    desk.spaces.switcher.is_some()
+}
+
+fn overlays_open(desk: &Desk) -> bool {
+    desk.mc_open()
 }

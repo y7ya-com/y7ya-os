@@ -92,6 +92,8 @@ pub struct Desk {
     pub seat: Seat<Desk>,
     /// A layer surface (like Spotlight) holding the keyboard.
     pub layer_focus: Option<WlSurface>,
+    pub toplevels: crate::toplevels::ForeignToplevels,
+    pub spaces: crate::overview::Spaces,
 
     pub output: Option<Output>,
     pub dark: bool,
@@ -115,6 +117,7 @@ impl Desk {
         let primary_selection_state = PrimarySelectionState::new::<Self>(&dh);
         let viewporter_state = ViewporterState::new::<Self>(&dh);
         let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
+        let toplevels = crate::toplevels::ForeignToplevels::init(&dh);
         let data_control_state = DataControlState::new::<Self, _>(&dh, Some(&primary_selection_state), |_| true);
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(&dh, "seat0");
@@ -164,6 +167,8 @@ impl Desk {
             dmabuf: None,
             seat,
             layer_focus: None,
+            toplevels,
+            spaces: Default::default(),
             output: None,
             dark: detect_dark(),
             hovered_lights: None,
@@ -304,6 +309,7 @@ impl Desk {
         let serial = SERIAL_COUNTER.next_serial();
         if let Some(w) = &window {
             self.space.raise_element(w, true);
+            self.note_focus(w);
         }
         for w in self.space.elements() {
             let active = window.as_ref() == Some(w);
@@ -394,7 +400,13 @@ impl Desk {
     pub fn spawn(&self, cmd: &str) {
         let mut parts = cmd.split_whitespace();
         let Some(program) = parts.next() else { return };
-        let result = std::process::Command::new(program)
+        let mut command = std::process::Command::new(program);
+        // Qt apps only load KDE's theme (and the user's colors) when told to,
+        // since the desktop isn't KDE.
+        if std::path::Path::new("/usr/lib/qt6/plugins/platformthemes/KDEPlasmaPlatformTheme6.so").exists() {
+            command.env("QT_QPA_PLATFORMTHEME", "kde");
+        }
+        let result = command
             .args(parts)
             .env("WAYLAND_DISPLAY", &self.socket_name)
             .env_remove("DISPLAY")

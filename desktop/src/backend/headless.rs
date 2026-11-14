@@ -2,7 +2,8 @@
 //! tests and screenshots without touching a real screen.
 //!
 //! Commands, one per line: `spawn <cmd>`, `move <x> <y>`, `click <x> <y>`,
-//! `down`, `up`, `key <mods+key>` (e.g. `key super+m`), `shot <file.png>`, `quit`.
+//! `down`, `up`, `key <mods+key>` (e.g. `key super+m`), `keydown <key>`,
+//! `keyup <key>`, `swipe <fingers> <dx> <dy>`, `shot <file.png>`, `quit`.
 
 use std::cell::RefCell;
 use std::io::BufRead;
@@ -94,6 +95,20 @@ pub fn init(event_loop: &mut EventLoop<'static, Desk>, desk: &mut Desk, size: (i
                 Some("down") => desk.pointer_button(BTN_LEFT, ButtonState::Pressed, time),
                 Some("up") => desk.pointer_button(BTN_LEFT, ButtonState::Released, time),
                 Some("key") => press_combo(desk, parts.get(1).copied().unwrap_or(""), time),
+                Some(cmd @ ("keydown" | "keyup")) => {
+                    let state = if cmd == "keydown" { KeyState::Pressed } else { KeyState::Released };
+                    if let Some(c) = parts.get(1).and_then(|k| evdev_code(k)) {
+                        desk.key(Keycode::new(c + 8), state, time);
+                    }
+                }
+                // `swipe <fingers> <dx> <dy>`: a touchpad swipe in 10 steps.
+                Some("swipe") => {
+                    desk.swipe_begin(num(1) as u32);
+                    for _ in 0..10 {
+                        desk.swipe_update(num(2) / 10.0, num(3) / 10.0);
+                    }
+                    desk.swipe_end(false);
+                }
                 Some("quit") => desk.loop_signal.stop(),
                 Some("shot") => {
                     let path = parts.get(1).copied().unwrap_or("shot.png");
@@ -161,6 +176,13 @@ fn evdev_code(name: &str) -> Option<u32> {
         "space" => 57,
         "backspace" => 14,
         "esc" => 1,
+        "up" => 103,
+        "down" => 108,
+        "left" => 105,
+        "right" => 106,
+        "1" => 2,
+        "2" => 3,
+        "3" => 4,
         k if k.len() == 1 => {
             let c = k.as_bytes()[0];
             const ROW: &[(u8, u32)] = &[

@@ -8,10 +8,13 @@
 mod backend;
 mod grabs;
 mod handlers;
+mod icons;
 mod input;
 mod layers;
+mod overview;
 mod render;
 mod state;
+mod toplevels;
 
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
@@ -51,6 +54,7 @@ fn main() -> anyhow::Result<()> {
         if let Some(after) = after.as_mut() {
             after(desk);
         }
+        desk.refresh_toplevels();
         // Send replies to clients after every round of requests.
         let _ = desk.display_handle.flush_clients();
     })?;

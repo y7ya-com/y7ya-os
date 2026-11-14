@@ -8,6 +8,7 @@ mod element;
 mod geom;
 mod input;
 mod kinetic;
+pub mod native;
 pub mod layer;
 mod platform;
 mod renderer;

@@ -99,6 +99,7 @@ pub struct Div<S> {
     pub(crate) border_bottom: Option<Color>,
     pub(crate) radius: f32,
     pub(crate) shadow: Option<(Color, f32, f32)>,
+    pub(crate) ring: Option<(Color, f32)>,
     pub(crate) text: TextOverrides,
     pub(crate) cursor: Option<CursorIcon>,
     pub(crate) children: Vec<AnyElement<S>>,
@@ -126,6 +127,7 @@ pub fn div<S>() -> Div<S> {
         border_bottom: None,
         radius: 0.0,
         shadow: None,
+        ring: None,
         text: TextOverrides::default(),
         cursor: None,
         children: Vec::new(),
@@ -349,6 +351,16 @@ impl<S> Div<S> {
         self.shadow = Some((c, blur, dy));
         self
     }
+    /// A ring `w` wide just outside the edge, following the corner radius:
+    /// the keyboard focus ring (see `native::focus_ring`).
+    pub fn ring(mut self, c: Color, w: f32) -> Self {
+        self.ring = Some((c, w));
+        self
+    }
+    /// `ring` with the system focus ring, when `on`.
+    pub fn focus_ring(self, on: bool, cx: &Cx) -> Self {
+        if on { self.ring(crate::native::focus_ring(cx), crate::native::FOCUS_RING_W) } else { self }
+    }
     pub fn text_size(mut self, v: f32) -> Self {
         self.text.size = Some(v);
         self
@@ -441,11 +453,12 @@ pub struct Text {
     pub(crate) content: String,
     pub(crate) overrides: TextOverrides,
     pub(crate) truncate: bool,
+    pub(crate) tabular: bool,
     pub(crate) layout: Style,
 }
 
 pub fn text(s: impl Into<String>) -> Text {
-    Text { content: s.into(), overrides: TextOverrides::default(), truncate: false, layout: Style::default() }
+    Text { content: s.into(), overrides: TextOverrides::default(), truncate: false, tabular: false, layout: Style::default() }
 }
 
 impl Styled for Text {
@@ -469,6 +482,12 @@ impl Text {
     }
     pub fn line_height(mut self, v: f32) -> Self {
         self.overrides.line_height = Some(v);
+        self
+    }
+    /// Fixed-width figures, for numbers that line up in columns or change
+    /// in place (times, sizes, percentages, a calculator display).
+    pub fn tabular(mut self) -> Self {
+        self.tabular = true;
         self
     }
     /// Single line, cut off with an ellipsis.
@@ -539,7 +558,7 @@ impl<S> From<Canvas> for AnyElement<S> {
 // layout + paint
 
 enum Measure {
-    Text { content: String, style: TextStyle, truncate: bool },
+    Text { content: String, style: TextStyle, truncate: bool, tabular: bool },
     Input(Rc<RefCell<TextInput>>),
 }
 
@@ -603,7 +622,7 @@ fn build<S>(el: &AnyElement<S>, tree: &mut TaffyTree<Measure>, inherited: TextSt
         }
         AnyElement::Text(t) => {
             let style = t.overrides.apply(inherited);
-            let m = Measure::Text { content: t.content.clone(), style, truncate: t.truncate };
+            let m = Measure::Text { content: t.content.clone(), style, truncate: t.truncate, tabular: t.tabular };
             tree.new_leaf_with_context(t.layout.clone(), m).unwrap()
         }
         AnyElement::Input(i) => tree.new_leaf_with_context(i.layout.clone(), Measure::Input(i.state.clone())).unwrap(),
@@ -643,16 +662,16 @@ pub fn render_tree<S>(root: &AnyElement<S>, cx: &mut Cx, scene: &mut Scene, base
                         _ => None,
                     });
                     let (w, h) = match ctx {
-                        Measure::Text { content, style, truncate } => {
+                        Measure::Text { content, style, truncate, tabular } => {
                             if *truncate {
-                                let (mw, mh) = fonts.measure(content, style, None, true);
+                                let (mw, mh) = fonts.measure_with(content, style, None, true, *tabular);
                                 let w = match avail.width {
                                     AvailableSpace::MinContent => 0.0,
                                     _ => width.map_or(mw, |w| mw.min(w)),
                                 };
                                 (w, mh)
                             } else {
-                                fonts.measure(content, style, width, false)
+                                fonts.measure_with(content, style, width, false, *tabular)
                             }
                         }
                         Measure::Input(state) => state.borrow_mut().measure(&mut fonts.fonts, width),
@@ -737,7 +756,8 @@ fn paint<'e, S>(
             }
             let style = t.overrides.apply(style);
             let scale = pcx.cx.scale;
-            pcx.cx.text.paint(pcx.scene, &t.content, &style, Some(b.w), t.truncate, Point { x: b.x, y: b.y }, scale);
+            let origin = Point { x: b.x, y: b.y };
+            pcx.cx.text.paint_with(pcx.scene, &t.content, &style, Some(b.w), t.truncate, t.tabular, origin, scale);
         }
         AnyElement::Input(i) => {
             let outer = abs_bounds(pcx.tree, node, origin);
@@ -829,6 +849,10 @@ fn paint_div<'e, S>(
 
     if let Some((c, blur, dy)) = d.shadow {
         pcx.scene.shadow(Bounds::new(b.x, b.y + dy, b.w, b.h), c, d.radius, blur);
+    }
+    if let Some((c, w)) = d.ring {
+        let r = Bounds::new(b.x - w, b.y - w, b.w + 2.0 * w, b.h + 2.0 * w);
+        pcx.scene.rect_bordered(r, Color::TRANSPARENT, d.radius + w, c, w);
     }
     let fill = if hovered { d.hover_bg.or(d.bg) } else { d.bg };
     match d.border {

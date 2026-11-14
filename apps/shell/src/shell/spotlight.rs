@@ -1,5 +1,6 @@
 //! Spotlight: a capsule search field with grouped results below, centered a
-//! little above the middle of the screen like macOS 26.
+//! little above the middle of the screen like macOS 26. The Start menu's
+//! search shows the same results.
 
 use ui::*;
 
@@ -70,7 +71,8 @@ impl Shell {
         self.update_results();
     }
 
-    pub(super) fn spotlight_key(&mut self, key: &KeyPress, cx: &mut Cx) -> bool {
+    /// Arrow keys and Enter in Spotlight or Start's search.
+    pub(super) fn search_key(&mut self, key: &KeyPress, cx: &mut Cx) -> bool {
         let n = self.hits().len();
         if key.is_named(NamedKey::ArrowDown) && n > 0 {
             self.selected = (self.selected + 1).min(n - 1);
@@ -106,9 +108,10 @@ impl Shell {
     pub(super) fn spotlight(&mut self, cx: &mut Cx, t: &Theme) -> Div<Self> {
         let (w, h) = cx.window_size;
         let x = ((w - WIDTH) / 2.0).max(8.0);
-        let y = (h * 0.19).max(24.0);
+        let y = (h * 0.22).max(24.0) - (1.0 - self.reveal()) * super::SLIDE;
         {
             let mut q = self.query.borrow_mut();
+            q.placeholder = "Spotlight Search".into();
             q.set_styles(TextStyle { size: 21.0, line_height: 1.25, weight: Weight::Regular, color: t.label }, None);
             q.placeholder_color = t.tertiary;
             q.caret_color = t.accent;
@@ -137,15 +140,25 @@ impl Shell {
     }
 
     fn results_card(&self, max_h: f32, t: &Theme) -> Div<Self> {
-        let mut card = div()
+        div()
             .w(WIDTH)
             .flex_col()
             .p(8.0)
             .rounded(22.0)
             .bg(t.card)
             .border(t.border, 0.5)
-            .shadow(t.shadow, 34.0, 12.0);
-        let mut used = 16.0;
+            .shadow(t.shadow, 34.0, 12.0)
+            .child(self.results_list(max_h - 16.0, t))
+    }
+
+    /// The result sections that fit in `max_h`.
+    pub(super) fn results_list(&self, max_h: f32, t: &Theme) -> Div<Self> {
+        let mut card = div().flex_col();
+        if self.results.is_empty() {
+            let q = self.query.borrow().text();
+            return card.child(text(format!("No results for \u{201c}{}\u{201d}", q.trim())).color(t.secondary).p(12.0));
+        }
+        let mut used = 0.0;
         let mut index = 0;
         'sections: for section in &self.results {
             if used + HEADER_H + ROW_H > max_h {
@@ -153,7 +166,13 @@ impl Shell {
             }
             used += HEADER_H;
             card = card.child(
-                text(section.title).size(11.0).weight(Weight::Semibold).color(t.secondary).pl(12.0).pt(7.0).pb(5.0),
+                // Padding on a bare text isn't applied; a div carries it.
+                div()
+                    .h(HEADER_H)
+                    .pl(10.0)
+                    .pb(5.0)
+                    .items_end()
+                    .child(text(section.title).size(11.0).weight(Weight::Semibold).color(t.secondary)),
             );
             for hit in &section.hits {
                 if used + ROW_H > max_h {
@@ -171,7 +190,7 @@ impl Shell {
         let selected = i == self.selected;
         let (fg, dim) = if selected { (Color::WHITE, Color::WHITE.alpha(0.75)) } else { (t.label, t.secondary) };
         let (icon, label, detail): (Div<Self>, String, String) = match hit {
-            Hit::App(app) => (letter_tile(&app.name, 24.0), app.name.clone(), "Application".into()),
+            Hit::App(app) => (div().size(24.0).shrink_0().child(self.start_icon(&app.id, 24.0)), app.name.clone(), "Application".into()),
             Hit::File { path, is_dir } => {
                 let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 let parent = path.parent().map(tilde).unwrap_or_default();

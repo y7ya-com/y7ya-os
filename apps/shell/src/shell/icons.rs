@@ -1,5 +1,5 @@
-//! Menu-bar and Control Center glyphs, drawn with rounded strokes in the
-//! SF Symbols spirit. Each centers itself in the given bounds.
+//! Taskbar, Start and Quick Settings glyphs, drawn with rounded strokes in
+//! the SF Symbols spirit. Each centers itself in the given bounds.
 
 use ui::{Bounds, Color, Scene, pt};
 
@@ -95,16 +95,6 @@ pub fn speaker(scene: &mut Scene, b: Bounds, color: Color, level: f32, muted: bo
 }
 
 /// Control Center: two switches.
-pub fn control_center(scene: &mut Scene, b: Bounds, color: Color) {
-    let c = b.center();
-    for (dy, knob_left) in [(-3.3, false), (3.3, true)] {
-        let pill = Bounds::new(c.x - 7.5, c.y + dy - 2.9, 15.0, 5.8);
-        outline(scene, pill, 2.9, color, 1.3);
-        let kx = if knob_left { pill.x + 0.6 } else { pill.right() - 5.2 };
-        scene.rect(Bounds::new(kx, pill.y + 0.6, 4.6, 4.6), color, 2.3);
-    }
-}
-
 pub fn magnifier(scene: &mut Scene, b: Bounds, color: Color, size: f32) {
     let c = b.center();
     let s = size / 16.0;
@@ -234,4 +224,68 @@ pub fn arrows(scene: &mut Scene, b: Bounds, color: Color) {
         scene.segment(tip, pt(tip.x - 3.0 * dir, y - 3.0), 1.8, color);
         scene.segment(tip, pt(tip.x - 3.0 * dir, y + 3.0), 1.8, color);
     }
+}
+
+/// The Start button: the y7ya-os mark knocked out of a soft rounded tile.
+/// `hole` is the color behind the tile (the mark shows through as it).
+pub fn start_mark(scene: &mut Scene, b: Bounds, tile: Color, hole: Color) {
+    let c = b.center();
+    let side = b.w.min(b.h);
+    let t = Bounds::new(c.x - side / 2.0, c.y - side / 2.0, side, side);
+    scene.rect(t, tile, side * 0.3);
+    logo(scene, t.inset(side * 0.16), hole);
+}
+
+/// Power: a ring open at the top with a bar through the gap.
+pub fn power(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    arc(scene, c.x, c.y + 0.5, 6.0, -55.0, 235.0, color, 1.6);
+    scene.segment(pt(c.x, c.y - 7.0), pt(c.x, c.y - 0.5), 1.6, color);
+}
+
+/// Restart: a ring turning clockwise, its arrowhead at the top.
+pub fn restart(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    let (r, end) = (6.0, 250.0f32);
+    arc(scene, c.x, c.y, r, -50.0, end, color, 1.6);
+    let a = end.to_radians();
+    let tip = pt(c.x + r * a.cos(), c.y + r * a.sin());
+    // Barbs swept back from the direction of travel.
+    let (tx, ty) = (-a.sin(), a.cos());
+    for turn in [0.6f32, -0.6] {
+        let (s, k) = turn.sin_cos();
+        let (bx, by) = (-(tx * k - ty * s), -(tx * s + ty * k));
+        scene.segment(tip, pt(tip.x + 3.6 * bx, tip.y + 3.6 * by), 1.6, color);
+    }
+}
+
+pub fn lock(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    let body = Bounds::new(c.x - 5.5, c.y - 1.0, 11.0, 8.0);
+    scene.rect(body, color, 2.0);
+    arc(scene, c.x, c.y - 3.5, 3.4, 180.0, 360.0, color, 1.6);
+    for x in [c.x - 3.4, c.x + 3.4] {
+        scene.segment(pt(x, c.y - 3.5), pt(x, c.y - 0.5), 1.6, color);
+    }
+}
+
+/// Log out: an open doorway with an arrow leaving it.
+pub fn log_out(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    let (l, r, top, bot) = (c.x - 6.5, c.x + 1.5, c.y - 6.5, c.y + 6.5);
+    scene.segment(pt(r, top + 3.0), pt(r, top), 1.6, color);
+    scene.segment(pt(r, top), pt(l, top), 1.6, color);
+    scene.segment(pt(l, top), pt(l, bot), 1.6, color);
+    scene.segment(pt(l, bot), pt(r, bot), 1.6, color);
+    scene.segment(pt(r, bot), pt(r, bot - 3.0), 1.6, color);
+    scene.segment(pt(c.x - 2.0, c.y), pt(c.x + 7.0, c.y), 1.6, color);
+    scene.segment(pt(c.x + 7.0, c.y), pt(c.x + 4.0, c.y - 3.0), 1.6, color);
+    scene.segment(pt(c.x + 7.0, c.y), pt(c.x + 4.0, c.y + 3.0), 1.6, color);
+}
+
+pub fn chevron(scene: &mut Scene, b: Bounds, color: Color, right: bool) {
+    let c = b.center();
+    let d = if right { 1.0 } else { -1.0 };
+    scene.segment(pt(c.x - 2.0 * d, c.y - 4.5), pt(c.x + 2.5 * d, c.y), 1.6, color);
+    scene.segment(pt(c.x + 2.5 * d, c.y), pt(c.x - 2.0 * d, c.y + 4.5), 1.6, color);
 }

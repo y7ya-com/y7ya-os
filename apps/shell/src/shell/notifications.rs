@@ -1,5 +1,6 @@
-//! Notification banners (their own small surface at the top right) and
-//! Notification Center (in the panel, opened from the clock).
+//! Notification banners (their own small surface at the bottom right, above
+//! the taskbar, newest at the bottom like Windows) and the notification list
+//! in the clock's flyout.
 
 use chrono::Local;
 use ui::*;
@@ -9,7 +10,9 @@ use super::theme::Theme;
 use super::{Panel, Shell, icons};
 use crate::notify::{CLOSED_DISMISSED, Notification};
 
-const CARD_W: f32 = 356.0;
+pub const CARD_W: f32 = 356.0;
+/// The flyout's notification list reaches this far past its cards.
+pub const LIST_PAD: f32 = 24.0;
 /// Room around banners for their shadow.
 const MARGIN: f32 = 16.0;
 const GAP: f32 = 8.0;
@@ -67,7 +70,7 @@ impl Shell {
         let shown: Vec<Notification> = store.banners.iter().filter_map(|b| store.get(b.id).cloned()).collect();
         drop(store);
         let mut col = div().flex_col().gap(GAP).p(MARGIN);
-        for n in &shown {
+        for n in shown.iter().rev() {
             col = col.child(self.card(n, true, cx, t));
         }
         col
@@ -155,7 +158,7 @@ impl Shell {
             .shadow(t.shadow.alpha(if banner { 1.0 } else { 0.6 }), 18.0, 5.0)
             .cursor(CursorIcon::Default)
             .on_click(move |s: &mut Self, _: &mut Cx| s.notification_clicked(id, None))
-            .child(letter_tile(&n.app, ICON))
+            .child(self.notification_icon(&n.app))
             .child(text_col)
             .child_if(hovered || cx.hovered((key.0, "close", id)), || close.into())
     }
@@ -165,92 +168,69 @@ impl Shell {
         self.flush_signals();
     }
 
-    pub(super) fn notification_center(&mut self, cx: &mut Cx, t: &Theme) -> Div<Self> {
-        let (w, h) = cx.window_size;
+    /// The sender's app icon, matched by name, or a letter tile.
+    fn notification_icon(&self, app: &str) -> AnyElement<Self> {
+        let entry = self.apps.iter().find(|e| e.name.eq_ignore_ascii_case(app) || e.matches_app_id(app));
+        match entry {
+            Some(e) => self.start_icon(&e.id.clone(), ICON),
+            None => letter_tile(app, ICON).into(),
+        }
+    }
+
+    /// The notification history for the clock's flyout, grouped by app,
+    /// scrolling once it's taller than `max_h`. `None` when there's nothing.
+    pub(super) fn notification_list(&mut self, max_h: f32, cx: &mut Cx, t: &Theme) -> Option<Div<Self>> {
         let store = self.store.lock().unwrap();
         let groups: Vec<(String, Vec<Notification>)> =
             store.groups().into_iter().map(|(app, list)| (app, list.into_iter().cloned().collect())).collect();
         drop(store);
-
-        let now = Local::now();
-        let widget = div()
-            .w(CARD_W)
-            .flex_row()
-            .items_center()
-            .gap(14.0)
-            .p(14.0)
-            .rounded(18.0)
-            .bg(t.card)
-            .border(t.border, 0.5)
-            .shadow(t.shadow.alpha(0.6), 18.0, 5.0)
-            .child(
-                div()
-                    .flex_col()
-                    .items_center()
-                    .w(64.0)
-                    .child(text(now.format("%A").to_string().to_uppercase()).size(10.0).weight(Weight::Bold).color(t.destructive))
-                    .child(text(now.format("%-d").to_string()).size(34.0).weight(Weight::Regular).line_height(1.1)),
-            )
-            .child(
-                div()
-                    .flex_col()
-                    .gap(2.0)
-                    .child(text(now.format("%B %Y").to_string()).weight(Weight::Semibold))
-                    .child(text("No events today").size(12.0).color(t.secondary)),
-            );
-
-        let mut col = div().flex_col().gap(GAP).w(CARD_W + 2.0 * MARGIN).px(MARGIN).pb(MARGIN).pt(6.0).child(widget);
         if groups.is_empty() {
-            col = col.child(
-                div()
-                    .w(CARD_W)
-                    .h(64.0)
-                    .rounded(18.0)
-                    .bg(t.card)
-                    .border(t.border, 0.5)
-                    .items_center()
-                    .justify_center()
-                    .child(text("No Notifications").color(t.secondary)),
-            );
-        } else {
-            col = col.child(
-                div()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .mt(6.0)
-                    .px(4.0)
-                    .child(chip(text("Notifications").size(13.0).weight(Weight::Bold), t))
-                    .child(self.pill("nc-clear-all", "Clear All", t, |s| {
-                        s.store.lock().unwrap().clear_all();
-                    })),
-            );
+            return None;
         }
+        // Headers are 22pt chips with 4pt (first) or 8pt of air above.
+        let mut height = 22.0;
+        let mut col = div().flex_col().gap(GAP).w(CARD_W).child(
+            div()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .child(chip(text("Notifications").size(13.0).weight(Weight::Bold), t))
+                .child(self.pill("nc-clear-all", "Clear All", t, |s| {
+                    s.store.lock().unwrap().clear_all();
+                })),
+        );
         for (app, list) in &groups {
             let a = app.clone();
+            height += GAP + 22.0 + 4.0;
             col = col.child(
                 div()
                     .flex_row()
                     .items_center()
                     .justify_between()
                     .mt(4.0)
-                    .px(4.0)
                     .child(chip(text(app.clone()).size(12.0).weight(Weight::Semibold), t))
                     .child(self.pill(("nc-clear", app.clone()), "Clear", t, move |s| s.store.lock().unwrap().clear_app(&a))),
             );
             for n in list.iter().take(4) {
+                height += GAP + Self::card_height(cx, n);
                 col = col.child(self.card(n, false, cx, t));
             }
             if list.len() > 4 {
+                height += GAP + 22.0;
                 col = col.child(div().flex_row().child(chip(text(format!("{} more", list.len() - 4)).size(11.0).color(t.secondary), t)));
             }
         }
-        div()
-            .id("nc-scroll")
-            .absolute(w - CARD_W - 2.0 * MARGIN + 6.0, 0.0)
-            .h(h)
-            .scroll_y()
-            .child(col.occlude())
+        // Room for the cards' shadows and the close buttons on their corners,
+        // which the scroll area would otherwise clip.
+        let (pad, pad_b) = (LIST_PAD, LIST_PAD);
+        Some(
+            div()
+                .id("nc-scroll")
+                .w(CARD_W + 2.0 * pad)
+                .h((height + pad + pad_b).min(max_h))
+                .scroll_y()
+                .child(col.w(CARD_W + 2.0 * pad).px(pad).pt(pad).pb(pad_b)),
+        )
     }
 
     fn pill(&self, id: impl std::hash::Hash, label: &'static str, t: &Theme, f: impl Fn(&mut Self) + 'static) -> Div<Self> {
@@ -266,7 +246,7 @@ impl Shell {
             .on_click(move |s: &mut Self, cx: &mut Cx| {
                 f(s);
                 s.flush_signals();
-                if s.store.lock().unwrap().history.is_empty() && s.panel == Panel::NotificationCenter {
+                if s.store.lock().unwrap().history.is_empty() && s.panel == Panel::Calendar {
                     cx.request_redraw();
                 }
             })

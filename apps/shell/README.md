@@ -1,7 +1,9 @@
 # y7-shell
 
-The y7ya-os system UI in one long-running process: the menu bar, Spotlight,
-Control Center, notification banners and Notification Center. It draws on
+The y7ya-os system UI in one long-running process: a Windows 10-style taskbar
+with Apple's materials and type (Start menu, app buttons, tray, clock, Show
+Desktop), Spotlight, Quick Settings, notification banners and the clock's
+calendar and notification flyout. It draws on
 wlr-layer-shell surfaces through `ui::run_layer`, so it needs a compositor with
 layer-shell (the y7ya-os desktop, or any wlroots/KWin session).
 
@@ -20,9 +22,11 @@ running or refused, 2 for an unknown command.
 
 | Command | Effect |
 |---|---|
+| `start` | Toggle the Start menu (for the desktop to bind to Super and Ctrl+Esc) |
 | `spotlight` | Toggle Spotlight (the desktop binds Super+Space to this) |
-| `control-center` | Toggle Control Center |
-| `notification-center` | Toggle Notification Center |
+| `quick-settings` | Toggle Quick Settings (`control-center` still works) |
+| `calendar` | Toggle the calendar and notifications (`notification-center` still works) |
+| `show-desktop` | Minimize every window, or bring them back |
 | `lock` | Lock the screen (`loginctl lock-session`) |
 | `dismiss` | Close whatever menu, panel or dialog is open |
 | `dnd on`, `dnd off`, `dnd toggle` | Do Not Disturb |
@@ -32,8 +36,17 @@ Anything can speak the protocol: connect, send `spotlight\n`, read `ok\n`.
 
 ## What talks to what
 
-- **Active app**: `zwlr_foreign_toplevel_manager_v1` on its own Wayland
-  connection. Without it (KWin) the menu bar just shows no app.
+- **Windows**: `zwlr_foreign_toplevel_manager_v1`, bound on the layer surfaces'
+  own connection (a separate event queue and thread) so the taskbar can send
+  each button's `set_rectangle` for the minimize animation. Without the
+  protocol (KWin) the taskbar shows only pinned apps.
+- **Taskbar order**: like Windows 10 with "never combine": pinned apps first,
+  a running pinned app's windows in its place, then other apps' windows grouped
+  by app. Pins live in `~/.local/share/y7-shell/taskbar-pins` and `start-pins`
+  (one desktop-file ID per line); right-click to change them.
+- **Icons**: app_id → `.desktop` → `Icon=` → icon themes (the user's
+  `~/.local/share/icons` first, then hicolor/Breeze/Adwaita; PNG or SVG via
+  resvg), decoded on a background thread. Apps without one get a letter tile.
 - **Notifications**: serves `org.freedesktop.Notifications` on the session bus
   (actions, body, persistence). If another daemon owns the name it logs that and
   runs without banners.
@@ -42,18 +55,19 @@ Anything can speak the protocol: connect, send `spotlight\n`, read `ok\n`.
   `bluetoothctl`, sound via `wpctl` (woken by `pactl subscribe`), brightness via
   sysfs and `brightnessctl` or logind, Now Playing over MPRIS. All behind the
   `System` trait in `src/system.rs`.
-- **Spotlight**: apps from `.desktop` files in the XDG data dirs, files from an
+- **Spotlight** (and the Start menu's search): apps from `.desktop` files in the XDG data dirs, files from an
   in-memory index of home (hidden, generated and huge folders skipped; refreshed
   incrementally by directory mtime each time Spotlight opens), a calculator and
   unit conversions.
 
 The UI thread sleeps until something happens; the clock wakes it once a minute.
+Flyouts slide and fade for 180 ms (140 ms out), ticking only while they move.
 
 ## Testing
 
 `Y7_SHELL_FAKE=1` swaps the machine for an in-memory one, so clicking Wi-Fi or
 Shut Down in a test changes nothing real. `Y7_SHELL_DATA_DIR` moves the Focus
-state. Run it in the headless desktop with a private session bus:
+state and pins. Run it in the headless desktop with a private session bus:
 
 ```sh
 dbus-daemon --session --print-address --fork   # in a temp dir; export the address

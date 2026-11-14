@@ -147,9 +147,52 @@ pub fn display_name(apps: &[DesktopEntry], app_id: &str) -> String {
     c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 
+/// The Start menu's "All apps": apps alphabetically under letter headers,
+/// with names that don't start with a letter under "#" first.
+pub fn by_letter(apps: &[DesktopEntry]) -> Vec<(String, Vec<&DesktopEntry>)> {
+    let header = |e: &DesktopEntry| match e.name.chars().find(|c| !c.is_whitespace()) {
+        Some(c) if c.is_alphabetic() => c.to_uppercase().collect::<String>(),
+        _ => "#".to_string(),
+    };
+    let mut sorted: Vec<&DesktopEntry> = apps.iter().collect();
+    sorted.sort_by_cached_key(|e| (header(e) != "#", header(e), e.name.to_lowercase()));
+    let mut out: Vec<(String, Vec<&DesktopEntry>)> = Vec::new();
+    for e in sorted {
+        let h = header(e);
+        match out.last_mut() {
+            Some((last, list)) if *last == h => list.push(e),
+            _ => out.push((h, vec![e])),
+        }
+    }
+    out
+}
+
+/// The entry with desktop-file ID `id`.
+pub fn by_id<'a>(apps: &'a [DesktopEntry], id: &str) -> Option<&'a DesktopEntry> {
+    apps.iter().find(|e| e.id == id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn groups_by_letter() {
+        let e = |name: &str| DesktopEntry { id: name.to_lowercase(), name: name.into(), exec: "x".into(), ..Default::default() };
+        let apps = [e("notes"), e("Calendar"), e("7-Zip"), e("Calculator"), e("Écran"), e("Files"), e("[x] tool")];
+        let groups: Vec<(String, Vec<&str>)> =
+            by_letter(&apps).into_iter().map(|(h, l)| (h, l.into_iter().map(|e| e.name.as_str()).collect())).collect();
+        let want: Vec<(String, Vec<&str>)> = vec![
+            ("#".into(), vec!["7-Zip", "[x] tool"]),
+            ("C".into(), vec!["Calculator", "Calendar"]),
+            ("F".into(), vec!["Files"]),
+            ("N".into(), vec!["notes"]),
+            ("É".into(), vec!["Écran"]),
+        ];
+        assert_eq!(groups, want);
+        assert_eq!(by_id(&apps, "files").map(|e| e.name.as_str()), Some("Files"));
+        assert!(by_letter(&[]).is_empty());
+    }
 
     const KONSOLE: &str = "[Desktop Entry]\nType=Application\nName=Konsole\nName[de]=Konsole DE\nGenericName=Terminal\n\
         Exec=konsole %U\nIcon=utilities-terminal\nKeywords=terminal;shell;console;\nStartupWMClass=konsole\n\

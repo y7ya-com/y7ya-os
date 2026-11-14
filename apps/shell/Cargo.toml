@@ -2,7 +2,7 @@
 name = "shell"
 version = "0.1.0"
 edition = "2024"
-description = "y7ya-os system UI: menu bar, Spotlight, Control Center and notifications"
+description = "y7ya-os system UI: taskbar, Start menu, Spotlight, Quick Settings and notifications"
 
 [[bin]]
 name = "y7-shell"
@@ -14,6 +14,8 @@ dirs = { workspace = true }
 ui = { path = "../../crates/ui" }
 # The org.freedesktop.Notifications server, MPRIS, UPower and NetworkManager.
 zbus = "5.19.0"
-# The active window, from the desktop's wlr-foreign-toplevel-management.
+# App icons drawn from SVG themes (the desktop uses the same version).
+resvg = { version = "0.50", default-features = false }
+# The open windows, from the desktop's wlr-foreign-toplevel-management.
 wayland-client = "0.31.15"
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }

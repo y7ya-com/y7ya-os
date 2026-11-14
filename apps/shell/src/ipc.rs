@@ -6,9 +6,11 @@
 //!
 //! | Command | Effect |
 //! |---|---|
+//! | `start` | Toggle the Start menu (the desktop binds Super and Ctrl+Esc) |
 //! | `spotlight` | Toggle Spotlight |
-//! | `control-center` | Toggle Control Center |
-//! | `notification-center` | Toggle Notification Center |
+//! | `quick-settings` | Toggle Quick Settings (also `control-center`) |
+//! | `calendar` | Toggle the calendar and notifications (also `notification-center`) |
+//! | `show-desktop` | Minimize every window, or bring them back |
 //! | `lock` | Lock the screen |
 //! | `dismiss` | Close whatever panel or menu is open |
 //! | `dnd on\|off\|toggle` | Do Not Disturb |
@@ -21,9 +23,11 @@ use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
+    Start,
     Spotlight,
-    ControlCenter,
-    NotificationCenter,
+    QuickSettings,
+    Calendar,
+    ShowDesktop,
     Lock,
     Dismiss,
     /// `None` toggles.
@@ -31,7 +35,8 @@ pub enum Command {
     Ping,
 }
 
-pub const USAGE: &str = "commands: spotlight, control-center, notification-center, lock, dismiss, dnd on|off|toggle, ping";
+pub const USAGE: &str =
+    "commands: start, spotlight, quick-settings, calendar, show-desktop, lock, dismiss, dnd on|off|toggle, ping";
 
 impl std::str::FromStr for Command {
     type Err = String;
@@ -39,9 +44,11 @@ impl std::str::FromStr for Command {
     fn from_str(s: &str) -> Result<Command, String> {
         let words: Vec<&str> = s.split_whitespace().collect();
         Ok(match words.as_slice() {
+            ["start"] => Command::Start,
             ["spotlight"] => Command::Spotlight,
-            ["control-center"] => Command::ControlCenter,
-            ["notification-center"] => Command::NotificationCenter,
+            ["quick-settings" | "control-center"] => Command::QuickSettings,
+            ["calendar" | "notification-center"] => Command::Calendar,
+            ["show-desktop"] => Command::ShowDesktop,
             ["lock"] => Command::Lock,
             ["dismiss"] => Command::Dismiss,
             ["dnd", "on"] => Command::Dnd(Some(true)),
@@ -110,9 +117,12 @@ mod tests {
 
     #[test]
     fn parses_commands() {
+        assert_eq!("start".parse(), Ok(Command::Start));
         assert_eq!("spotlight".parse(), Ok(Command::Spotlight));
-        assert_eq!(" control-center \n".parse(), Ok(Command::ControlCenter));
-        assert_eq!("notification-center".parse(), Ok(Command::NotificationCenter));
+        assert_eq!(" control-center \n".parse(), Ok(Command::QuickSettings));
+        assert_eq!("quick-settings".parse(), Ok(Command::QuickSettings));
+        assert_eq!("notification-center".parse(), Ok(Command::Calendar));
+        assert_eq!("show-desktop".parse(), Ok(Command::ShowDesktop));
         assert_eq!("dnd on".parse(), Ok(Command::Dnd(Some(true))));
         assert_eq!("dnd".parse(), Ok(Command::Dnd(None)));
         assert!("launch rockets".parse::<Command>().is_err());

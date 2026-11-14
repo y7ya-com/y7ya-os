@@ -7,6 +7,12 @@ pub enum WindowButton {
     Close,
 }
 
+/// Whether we're running inside the y7ya-os desktop (which wants macOS-style
+/// window controls inside each app's own title bar).
+pub fn is_y7ya() -> bool {
+    std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.to_lowercase().contains("y7ya"))
+}
+
 /// Window buttons for the left and right side of the header bar, read from
 /// KDE's decoration settings (`kwinrc`), falling back to KDE's defaults.
 pub fn window_button_layout() -> (Vec<WindowButton>, Vec<WindowButton>) {

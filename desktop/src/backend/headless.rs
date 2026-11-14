@@ -39,7 +39,9 @@ impl Headless {
         let Ok(mut fb) = self.renderer.bind(&mut self.target) else { return };
         let elements = render::elements(desk, &mut self.look, &mut self.renderer);
         // The target keeps its contents, so only damage needs redrawing.
-        if let Err(e) = self.damage.render_output(&mut self.renderer, &mut fb, 1, &elements, [0.0, 0.0, 0.0, 1.0]) {
+        // Y7_FULL_REDRAW=1 repaints everything each frame (to debug damage).
+        let age = if std::env::var_os("Y7_FULL_REDRAW").is_some() { 0 } else { 1 };
+        if let Err(e) = self.damage.render_output(&mut self.renderer, &mut fb, age, &elements, [0.0, 0.0, 0.0, 1.0]) {
             tracing::warn!("render failed: {e:?}");
         }
         drop(fb);
@@ -54,10 +56,12 @@ pub fn init(event_loop: &mut EventLoop<'static, Desk>, desk: &mut Desk, size: (i
     let display = unsafe { EGLDisplay::new(EGLSurfacelessDisplay)? };
     let context = EGLContext::new(&display)?;
     let mut renderer = unsafe { GlesRenderer::new(context)? };
-    let output = super::add_output(desk, "headless", size, scale, Transform::Normal);
-    let look = Look::new(&mut renderer)?;
-    let damage = OutputDamageTracker::from_output(&output);
+    // `size` is in logical pixels; the output mode is physical.
     let phys = ((size.0 as f64 * scale) as i32, (size.1 as f64 * scale) as i32);
+    let output = super::add_output(desk, "headless", phys, scale, Transform::Normal);
+    let look = Look::new(&mut renderer)?;
+    desk.init_dmabuf(&renderer);
+    let damage = OutputDamageTracker::from_output(&output);
     let target: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, phys.into())?;
     let state = Rc::new(RefCell::new(Headless { renderer, target, look, damage, size: phys }));
 

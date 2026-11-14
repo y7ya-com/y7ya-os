@@ -22,6 +22,9 @@ use smithay::wayland::shell::xdg::XdgShellState;
 use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
 use smithay::wayland::shm::ShmState;
 use smithay::wayland::socket::ListeningSocketSource;
+use smithay::wayland::dmabuf::{DmabufGlobal, DmabufState};
+use smithay::wayland::selection::wlr_data_control::DataControlState;
+use smithay::wayland::shell::wlr_layer::{Layer, WlrLayerShellState};
 use smithay::wayland::viewporter::ViewporterState;
 
 use crate::grabs::Edges;
@@ -83,7 +86,12 @@ pub struct Desk {
     pub data_device_state: DataDeviceState,
     pub primary_selection_state: PrimarySelectionState,
     pub viewporter_state: ViewporterState,
+    pub layer_shell_state: WlrLayerShellState,
+    pub data_control_state: DataControlState,
+    pub dmabuf: Option<(DmabufState, DmabufGlobal)>,
     pub seat: Seat<Desk>,
+    /// A layer surface (like Spotlight) holding the keyboard.
+    pub layer_focus: Option<WlSurface>,
 
     pub output: Option<Output>,
     pub dark: bool,
@@ -106,6 +114,8 @@ impl Desk {
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let primary_selection_state = PrimarySelectionState::new::<Self>(&dh);
         let viewporter_state = ViewporterState::new::<Self>(&dh);
+        let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
+        let data_control_state = DataControlState::new::<Self, _>(&dh, Some(&primary_selection_state), |_| true);
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(&dh, "seat0");
         seat.add_keyboard(Default::default(), 300, 30).expect("keyboard");
@@ -149,7 +159,11 @@ impl Desk {
             data_device_state,
             primary_selection_state,
             viewporter_state,
+            layer_shell_state,
+            data_control_state,
+            dmabuf: None,
             seat,
+            layer_focus: None,
             output: None,
             dark: detect_dark(),
             hovered_lights: None,
@@ -185,11 +199,15 @@ impl Desk {
     }
 
     pub fn surface_under(&self, pos: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>)> {
-        self.space.element_under(pos).and_then(|(window, loc)| {
-            window
-                .surface_under(pos - loc.to_f64(), WindowSurfaceType::ALL)
-                .map(|(s, p)| (s, (p + loc).to_f64()))
-        })
+        self.layer_under(&[Layer::Overlay, Layer::Top], pos)
+            .or_else(|| {
+                self.space.element_under(pos).and_then(|(window, loc)| {
+                    window
+                        .surface_under(pos - loc.to_f64(), WindowSurfaceType::ALL)
+                        .map(|(s, p)| (s, (p + loc).to_f64()))
+                })
+            })
+            .or_else(|| self.layer_under(&[Layer::Bottom, Layer::Background], pos))
     }
 
     pub fn focused_window(&self) -> Option<Window> {
@@ -199,7 +217,7 @@ impl Desk {
 
     /// Smallest y for a window's content, so its title bar stays on screen.
     pub fn min_content_y(&self, window: &Window) -> i32 {
-        self.output_geometry().loc.y + if is_ssd(window) { TITLEBAR_H } else { 0 }
+        self.usable_area().loc.y + if is_ssd(window) { TITLEBAR_H } else { 0 }
     }
 
     /// The window's visible frame: its content plus our title bar.
@@ -296,6 +314,7 @@ impl Desk {
             }
         }
         let surface = window.and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()));
+        let surface = self.layer_focus.clone().or(surface);
         let keyboard = self.seat.get_keyboard().unwrap();
         keyboard.set_focus(self, surface, serial);
         self.redraw();
@@ -345,7 +364,7 @@ impl Desk {
             None => {
                 let Some(loc) = self.space.element_location(window) else { return };
                 data.borrow_mut().restore = Some(Rectangle::new(loc, window.geometry().size));
-                let out = self.output_geometry();
+                let out = self.usable_area();
                 let top = if is_ssd(window) { TITLEBAR_H } else { 0 };
                 toplevel.with_pending_state(|s| {
                     s.states.set(xdg_toplevel::State::Maximized);
@@ -360,7 +379,7 @@ impl Desk {
 
     /// Maps a window, cascading new ones from the top-left like macOS.
     pub fn place(&mut self, window: &Window, at: Option<Point<i32, Logical>>) {
-        let out = self.output_geometry();
+        let out = self.usable_area();
         let loc = at.unwrap_or_else(|| {
             let size = window.geometry().size;
             let n = self.space.elements().count() as i32;
@@ -380,6 +399,7 @@ impl Desk {
             .env("WAYLAND_DISPLAY", &self.socket_name)
             .env_remove("DISPLAY")
             .env("XDG_SESSION_TYPE", "wayland")
+            .env("XDG_CURRENT_DESKTOP", "y7ya-os")
             .env("QT_QPA_PLATFORM", "wayland")
             .env("GDK_BACKEND", "wayland")
             .env("MOZ_ENABLE_WAYLAND", "1")
@@ -414,6 +434,9 @@ pub fn frame_of(window: &Window, loc: Point<i32, Logical>) -> Rectangle<i32, Log
 
 /// KDE's color scheme says whether the user prefers dark.
 fn detect_dark() -> bool {
+    if let Ok(theme) = std::env::var("Y7_THEME") {
+        return theme == "dark";
+    }
     let path = dirs::config_dir().map(|d| d.join("kdeglobals"));
     let Some(s) = path.and_then(|p| std::fs::read_to_string(p).ok()) else { return true };
     s.lines().find_map(|l| l.strip_prefix("ColorScheme=")).is_some_and(|v| v.to_lowercase().contains("dark"))

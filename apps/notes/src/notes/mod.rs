@@ -72,8 +72,6 @@ pub struct NotesApp {
     sidebar_open: bool,
     menu: Option<Menu>,
     dirty_since: Option<Instant>,
-    /// Window buttons for the left and right ends of the header, from KDE settings.
-    buttons: (Vec<WindowButton>, Vec<WindowButton>),
     events: Option<Arc<SyncEvents>>,
     sync_dialog: Option<SyncDialog>,
 }
@@ -111,7 +109,6 @@ impl NotesApp {
             sidebar_open: true,
             menu: None,
             dirty_since: None,
-            buttons: window_button_layout(),
             events,
             sync_dialog: None,
         };
@@ -469,41 +466,9 @@ impl NotesApp {
         }
     }
 
-    /// Breeze-style window buttons; empty when that side has none.
+    /// Window buttons for one end of a header; `None` when that end has none.
     fn window_buttons(&self, left: bool, cx: &Cx, t: &Theme) -> Option<Div<Self>> {
-        let buttons = if left { &self.buttons.0 } else { &self.buttons.1 };
-        if buttons.is_empty() {
-            return None;
-        }
-        let mut row = div().flex_row().items_center().gap(6.0);
-        for &kind in buttons {
-            let hovered = cx.hovered(("window-button", kind));
-            let (bg, fg) = match (kind, hovered) {
-                (WindowButton::Close, true) => (Some(rgb(0xda4453)), Color::WHITE),
-                (_, true) => (Some(t.text.alpha(0.15)), t.text),
-                _ => (None, t.text),
-            };
-            let glyph: fn(&mut Scene, Bounds, Color) = match kind {
-                WindowButton::Close => icons::breeze_close,
-                WindowButton::Minimize => icons::breeze_minimize,
-                WindowButton::Maximize if cx.maximized => icons::breeze_restore,
-                WindowButton::Maximize => icons::breeze_maximize,
-            };
-            row = row.child(
-                div()
-                    .id(("window-button", kind))
-                    .size(20.0)
-                    .rounded(10.0)
-                    .bg_opt(bg)
-                    .on_click(move |_: &mut Self, cx: &mut Cx| match kind {
-                        WindowButton::Close => cx.close_window(),
-                        WindowButton::Minimize => cx.minimize_window(),
-                        WindowButton::Maximize => cx.toggle_maximize(),
-                    })
-                    .child(canvas(move |s, b| glyph(s, b, fg)).size(20.0)),
-            );
-        }
-        Some(row)
+        ui::chrome::window_buttons(left, cx, t.text)
     }
 
     fn icon_button(
@@ -1138,8 +1103,9 @@ impl App for NotesApp {
         if let Some(dialog) = &self.sync_dialog {
             root = root.child(self.sync_sheet(dialog, cx, &t));
         }
-        // Frameless windows get no compositor outline, so draw a hairline edge.
-        if cx.transparent && !cx.maximized {
+        // Frameless windows get no compositor outline (except on y7ya-os), so
+        // draw a hairline edge.
+        if cx.transparent && !cx.maximized && !ui::is_y7ya() {
             root = root.child(div().inset_0().rounded(cx.window_radius).border(t.window_border, 1.0));
         }
         root

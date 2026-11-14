@@ -1,5 +1,5 @@
-// A soft macOS-style window shadow: a tight contact shadow plus a large
-// diffuse one, cut out under the window itself.
+// A macOS-style window shadow in three layers: a hairline edge, a tight
+// shadow and a large soft drop shadow, cut out under the window itself.
 //
 // The blurred rounded box uses Evan Wallace's approximation:
 // https://madebyevan.com/shaders/fast-rounded-rectangle-shadows/ (CC0)
@@ -14,10 +14,10 @@ uniform float tint;
 uniform float scale;
 uniform vec4 rect;      // the window frame, logical px relative to this element
 uniform float radius;
-uniform vec4 near;      // contact shadow color (straight alpha)
-uniform vec4 far;       // diffuse shadow color (straight alpha)
-uniform vec2 sigmas;    // contact, diffuse
-uniform float far_dy;   // diffuse shadow drops a little
+// Per layer: x = blur sigma, y = vertical offset, z = opacity.
+uniform vec3 edge;
+uniform vec3 mid;
+uniform vec3 far;
 
 float gaussian(float x, float sigma) {
     return exp(-(x * x) / (2.0 * sigma * sigma)) / (2.5066283 * sigma);
@@ -45,10 +45,10 @@ float box_shadow(vec2 lower, vec2 upper, vec2 p, float sigma, float corner) {
     float high = p.y + half_size.y;
     float start = clamp(-3.0 * sigma, low, high);
     float end = clamp(3.0 * sigma, low, high);
-    float step = (end - start) / 4.0;
+    float step = (end - start) / 8.0;
     float y = start + step * 0.5;
     float value = 0.0;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 8; i++) {
         value += shadow_x(p.x, p.y - y, sigma, corner, half_size) * gaussian(y, sigma) * step;
         y += step;
     }
@@ -61,21 +61,24 @@ float inside_rounded(vec2 p, vec2 lo, vec2 hi, float r) {
     return clamp(0.5 - d * scale, 0.0, 1.0);
 }
 
+float layer(vec2 p, vec2 lo, vec2 hi, vec3 l) {
+    vec2 dy = vec2(0.0, l.y);
+    return box_shadow(lo + dy, hi + dy, p, max(l.x, 0.3), radius) * l.z;
+}
+
 void main() {
-    vec2 p = v_coords * size / scale;
+    // `size` is the element's logical size; `scale` only sharpens edges.
+    vec2 p = v_coords * size;
     vec2 lo = rect.xy;
     vec2 hi = rect.xy + rect.zw;
 
-    float a_near = box_shadow(lo, hi, p, sigmas.x, radius) * near.a;
-    float a_far = box_shadow(lo + vec2(0.0, far_dy), hi + vec2(0.0, far_dy), p, sigmas.y, radius) * far.a;
-    // Both shadows are black-ish; combine coverage.
-    float a = 1.0 - (1.0 - a_near) * (1.0 - a_far);
-    vec3 c = (near.rgb * a_near + far.rgb * a_far) / max(a_near + a_far, 1e-4);
+    // Layers stack like separate shadows would.
+    float a = 1.0 - (1.0 - layer(p, lo, hi, edge)) * (1.0 - layer(p, lo, hi, mid)) * (1.0 - layer(p, lo, hi, far));
 
     // Nothing under the window itself (keeps translucent windows clean).
     a *= 1.0 - inside_rounded(p, lo, hi, radius);
 
-    gl_FragColor = vec4(c * a, a) * alpha;
+    gl_FragColor = vec4(0.0, 0.0, 0.0, a) * alpha;
 #if defined(DEBUG_FLAGS)
     if (tint == 1.0) gl_FragColor = vec4(0.0, 0.2, 0.0, 0.2) + gl_FragColor * 0.8;
 #endif

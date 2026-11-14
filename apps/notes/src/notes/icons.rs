@@ -118,35 +118,3 @@ fn arc(scene: &mut Scene, cx: f32, cy: f32, r: f32, from_deg: f32, to_deg: f32, 
         prev = Some(p);
     }
 }
-
-// Breeze window-button glyphs, drawn on Breeze's 18-unit grid.
-
-fn breeze_grid(b: Bounds) -> (f32, f32, f32) {
-    frame(b, 18.0)
-}
-
-pub fn breeze_close(scene: &mut Scene, b: Bounds, color: Color) {
-    let (x, y, s) = breeze_grid(b);
-    scene.segment(pt(x + 5.0 * s, y + 5.0 * s), pt(x + 13.0 * s, y + 13.0 * s), 1.3, color);
-    scene.segment(pt(x + 13.0 * s, y + 5.0 * s), pt(x + 5.0 * s, y + 13.0 * s), 1.3, color);
-}
-
-pub fn breeze_minimize(scene: &mut Scene, b: Bounds, color: Color) {
-    let (x, y, s) = breeze_grid(b);
-    scene.segment(pt(x + 4.0 * s, y + 7.0 * s), pt(x + 9.0 * s, y + 12.0 * s), 1.3, color);
-    scene.segment(pt(x + 9.0 * s, y + 12.0 * s), pt(x + 14.0 * s, y + 7.0 * s), 1.3, color);
-}
-
-pub fn breeze_maximize(scene: &mut Scene, b: Bounds, color: Color) {
-    let (x, y, s) = breeze_grid(b);
-    scene.segment(pt(x + 4.0 * s, y + 11.0 * s), pt(x + 9.0 * s, y + 6.0 * s), 1.3, color);
-    scene.segment(pt(x + 9.0 * s, y + 6.0 * s), pt(x + 14.0 * s, y + 11.0 * s), 1.3, color);
-}
-
-pub fn breeze_restore(scene: &mut Scene, b: Bounds, color: Color) {
-    let (x, y, s) = breeze_grid(b);
-    let pts = [pt(x + 4.0 * s, y + 9.0 * s), pt(x + 9.0 * s, y + 4.0 * s), pt(x + 14.0 * s, y + 9.0 * s), pt(x + 9.0 * s, y + 14.0 * s)];
-    for i in 0..4 {
-        scene.segment(pts[i], pts[(i + 1) % 4], 1.3, color);
-    }
-}

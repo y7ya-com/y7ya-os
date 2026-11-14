@@ -2,7 +2,7 @@
 // corners, a hairline under it, and the traffic lights.
 precision highp float;
 varying vec2 v_coords;
-uniform vec2 size;   // element size in physical pixels
+uniform vec2 size;   // element size in logical pixels (Smithay passes the area size)
 uniform float alpha;
 #if defined(DEBUG_FLAGS)
 uniform float tint;
@@ -35,7 +35,7 @@ vec4 over(vec4 dst, vec3 color, float a) {
 }
 
 void main() {
-    vec2 logical = size / scale;
+    vec2 logical = size;
     vec2 p = v_coords * logical;
 
     // Rounded top corners.

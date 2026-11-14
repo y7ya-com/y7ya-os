@@ -48,6 +48,9 @@ impl CompositorHandler for Desk {
         if is_sync_subsurface(surface) {
             return;
         }
+        if self.commit_layer(surface) {
+            return;
+        }
         if let Some(window) = self.window_for_surface(surface) {
             window.on_commit();
             let toplevel = window.toplevel().unwrap();
@@ -225,16 +228,20 @@ impl XdgDecorationHandler for Desk {
         toplevel.with_pending_state(|s| s.decoration_mode = Some(DecoMode::ServerSide));
     }
 
-    fn request_mode(&mut self, toplevel: ToplevelSurface, _mode: DecoMode) {
-        // Every window gets the same title bar; that's the point.
-        toplevel.with_pending_state(|s| s.decoration_mode = Some(DecoMode::ServerSide));
+    fn request_mode(&mut self, toplevel: ToplevelSurface, mode: DecoMode) {
+        // Apps that draw their own Mac-style toolbar (ours, Firefox...) keep
+        // it; everything else gets our title bar.
+        toplevel.with_pending_state(|s| s.decoration_mode = Some(mode));
         if toplevel.is_initial_configure_sent() {
             toplevel.send_pending_configure();
         }
     }
 
     fn unset_mode(&mut self, toplevel: ToplevelSurface) {
-        self.request_mode(toplevel, DecoMode::ServerSide);
+        toplevel.with_pending_state(|s| s.decoration_mode = Some(DecoMode::ServerSide));
+        if toplevel.is_initial_configure_sent() {
+            toplevel.send_pending_configure();
+        }
     }
 }
 

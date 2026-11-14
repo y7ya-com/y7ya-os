@@ -19,7 +19,9 @@ use smithay::backend::renderer::gles::{
     GlesError, GlesFrame, GlesPixelProgram, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType,
 };
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
-use smithay::desktop::{PopupManager, Window};
+use smithay::backend::renderer::element::AsRenderElements;
+use smithay::desktop::{PopupManager, Window, layer_map_for_output};
+use smithay::wayland::shell::wlr_layer::Layer;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Transform};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
@@ -27,8 +29,9 @@ use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 use crate::state::{Desk, LIGHT_GAP, LIGHT_R, LIGHT_X, RADIUS, TITLEBAR_H, frame_of, is_ssd, win_data};
 
 const OPEN_ANIM: Duration = Duration::from_millis(220);
-/// How far shadows reach past a window frame.
-const SHADOW_MARGIN: i32 = 64;
+/// How far shadows reach past a window frame: the soft layer's blur (3σ)
+/// plus its drop, with room to spare so it always fades out fully.
+const SHADOW_MARGIN: i32 = 120;
 
 smithay::backend::renderer::element::render_elements! {
     pub DeskElement<=GlesRenderer>;
@@ -68,7 +71,7 @@ impl Shaders {
             )?,
             shadow: r.compile_custom_pixel_shader(
                 include_str!("shaders/shadow.frag"),
-                &[f("scale"), f4("rect"), f("radius"), f4("near"), f4("far"), f2("sigmas"), f("far_dy")],
+                &[f("scale"), f4("rect"), f("radius"), f3("edge"), f3("mid"), f3("far")],
             )?,
             wallpaper: r.compile_custom_pixel_shader(include_str!("shaders/wallpaper.frag"), &[f("dark")])?,
             rounded: r.compile_custom_texture_shader(
@@ -208,6 +211,7 @@ pub fn elements(desk: &mut Desk, look: &mut Look, renderer: &mut GlesRenderer) -
     let focused = desk.focused_window();
     let dark = desk.dark;
     let mut out: Vec<DeskElement> = Vec::new();
+    layer_elements(desk, renderer, &[Layer::Overlay, Layer::Top], scale, &mut out);
     let windows: Vec<Window> = desk.space.elements().rev().cloned().collect();
 
     for window in &windows {
@@ -346,8 +350,13 @@ pub fn elements(desk: &mut Desk, look: &mut Look, renderer: &mut GlesRenderer) -
             let area = scaled(area);
             let m = SHADOW_MARGIN as f32 * zoom;
             let (fw, fh) = (frame.size.w as f32 * zoom, frame.size.h as f32 * zoom);
-            let (near_a, far_a, far_sigma) = if active { (0.30, 0.42, 22.0) } else { (0.22, 0.20, 16.0) };
-            let near_a = if dark { near_a + 0.25 } else { near_a };
+            // (sigma, drop, opacity) per layer; the active window floats higher.
+            let (edge, mid, far) = match (active, dark) {
+                (true, false) => ([0.6, 0.0, 0.22], [5.0, 2.0, 0.12], [26.0, 20.0, 0.30]),
+                (false, false) => ([0.6, 0.0, 0.16], [4.0, 1.0, 0.08], [16.0, 10.0, 0.16]),
+                (true, true) => ([0.6, 0.0, 0.55], [5.0, 2.0, 0.25], [26.0, 20.0, 0.50]),
+                (false, true) => ([0.6, 0.0, 0.45], [4.0, 1.0, 0.18], [16.0, 10.0, 0.30]),
+            };
             let elem = ShaderSlot::get(
                 &mut wl.shadow,
                 &look.shaders.shadow,
@@ -357,19 +366,35 @@ pub fn elements(desk: &mut Desk, look: &mut Look, renderer: &mut GlesRenderer) -
                     ("scale", vec![scale as f32]),
                     ("rect", vec![m, m, fw, fh]),
                     ("radius", vec![RADIUS * zoom]),
-                    ("near", vec![0.0, 0.0, 0.0, near_a]),
-                    ("far", vec![0.0, 0.0, 0.0, far_a]),
-                    ("sigmas", vec![1.2, far_sigma]),
-                    ("far_dy", vec![if active { 14.0 } else { 8.0 }]),
+                    ("edge", edge.to_vec()),
+                    ("mid", mid.to_vec()),
+                    ("far", far.to_vec()),
                 ],
             );
             out.push(DeskElement::Shader(elem));
         }
     }
 
+    layer_elements(desk, renderer, &[Layer::Bottom, Layer::Background], scale, &mut out);
     let wallpaper = ShaderSlot::get(&mut look.wallpaper, &look.shaders.wallpaper, out_geo, 1.0, vec![("dark", vec![dark as u8 as f32])]);
     out.push(DeskElement::Shader(wallpaper));
     out
+}
+
+/// Layer surfaces (menu bar, panels) on the given layers, top first.
+fn layer_elements(desk: &Desk, renderer: &mut GlesRenderer, layers: &[Layer], scale: f64, out: &mut Vec<DeskElement>) {
+    let Some(output) = &desk.output else { return };
+    let map = layer_map_for_output(output);
+    let origin = desk.output_geometry().loc;
+    for &kind in layers {
+        for layer in map.layers_on(kind).rev() {
+            let Some(geo) = map.layer_geometry(layer) else { continue };
+            let at = (geo.loc + origin).to_physical_precise_round(scale);
+            let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                layer.render_elements(renderer, at, Scale::from(scale), 1.0);
+            out.extend(elems.into_iter().map(|e| DeskElement::Surface(RescaleRenderElement::from_element(e, at, 1.0))));
+        }
+    }
 }
 
 /// A window surface drawn through the corner-rounding shader.

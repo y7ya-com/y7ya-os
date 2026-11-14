@@ -2,6 +2,7 @@
 //! wgpu for drawing, cosmic-text for text and taffy for flexbox layout.
 
 mod app;
+pub mod chrome;
 mod cx;
 mod element;
 mod geom;
@@ -16,7 +17,7 @@ pub use cx::{Cx, Waker};
 pub use element::{AnyElement, Div, ElementId, Styled, canvas, div, eid, input, text};
 pub use geom::{Bounds, Color, Point, pt, rgb, rgba};
 pub use input::{KeyPress, TextInput};
-pub use platform::{WindowButton, window_button_layout};
+pub use platform::{WindowButton, is_y7ya, window_button_layout};
 pub use scene::Scene;
 pub use text::{TextStyle, Weight};
 pub use winit::keyboard::{Key, NamedKey};

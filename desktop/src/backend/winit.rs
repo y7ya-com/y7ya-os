@@ -22,6 +22,7 @@ pub fn init(event_loop: &mut EventLoop<'static, Desk>, desk: &mut Desk) -> anyho
     let scale = backend.window().scale_factor();
     let output = super::add_output(desk, "nested", (size.w, size.h), scale, Transform::Flipped180);
     let mut look = Look::new(backend.renderer())?;
+    desk.init_dmabuf(backend.renderer());
     let mut damage = OutputDamageTracker::from_output(&output);
     let backend: Rc<RefCell<WinitGraphicsBackend<GlesRenderer>>> = Rc::new(RefCell::new(backend));
 

@@ -460,6 +460,10 @@ impl<A: App> ApplicationHandler for Runner<A> {
                 self.cx.redraw = true;
             }
             WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
+            WindowEvent::Focused(focused) => {
+                self.cx.window_focused = focused;
+                self.cx.redraw = true;
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cx.mouse = Point { x: position.x as f32 / self.cx.scale, y: position.y as f32 / self.cx.scale };
                 if let Some((state, b)) = &self.pressed_input {
@@ -473,11 +477,17 @@ impl<A: App> ApplicationHandler for Runner<A> {
                 self.cx.mouse = Point { x: -1.0, y: -1.0 };
                 self.update_hover();
             }
-            WindowEvent::MouseInput { state, button, .. } => match state {
-                ElementState::Pressed => self.mouse_down(button),
-                ElementState::Released if button == MouseButton::Left => self.mouse_up(),
-                _ => {}
-            },
+            WindowEvent::MouseInput { state, button, .. } => {
+                if button == MouseButton::Left {
+                    self.cx.mouse_down = state == ElementState::Pressed;
+                    self.cx.redraw = true;
+                }
+                match state {
+                    ElementState::Pressed => self.mouse_down(button),
+                    ElementState::Released if button == MouseButton::Left => self.mouse_up(),
+                    _ => {}
+                }
+            }
             WindowEvent::MouseWheel { delta, .. } => self.scroll(delta),
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } if event.state == ElementState::Pressed => {
                 let m = self.modifiers;

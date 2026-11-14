@@ -23,6 +23,10 @@ pub struct Cx {
     pub scale: f32,
     pub dark: bool,
     pub maximized: bool,
+    /// Whether this window has keyboard focus (inactive windows dim their controls).
+    pub window_focused: bool,
+    /// Whether the left mouse button is held.
+    pub mouse_down: bool,
     /// True when the window can have transparent (rounded) corners.
     pub transparent: bool,
     /// Rounded window corners (only applied when `transparent`).
@@ -58,6 +62,8 @@ impl Cx {
             scale: 1.0,
             dark: false,
             maximized: false,
+            window_focused: true,
+            mouse_down: false,
             transparent: false,
             window_radius: 0.0,
             mouse: Point { x: -1.0, y: -1.0 },
@@ -121,7 +127,8 @@ impl Cx {
     }
 
     pub(crate) fn effective_window_radius(&self) -> f32 {
-        if self.transparent && !self.maximized { self.window_radius } else { 0.0 }
+        // The y7ya-os desktop rounds and outlines windows itself.
+        if self.transparent && !self.maximized && !crate::platform::is_y7ya() { self.window_radius } else { 0.0 }
     }
 
     pub fn request_redraw(&mut self) {

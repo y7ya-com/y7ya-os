@@ -9,6 +9,7 @@ mod backend;
 mod grabs;
 mod handlers;
 mod input;
+mod layers;
 mod render;
 mod state;
 

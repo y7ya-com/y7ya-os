@@ -11,6 +11,7 @@ mod platform;
 mod renderer;
 mod scene;
 mod text;
+pub mod widgets;
 
 pub use app::{App, WindowOptions, run, snapshot};
 pub use cx::{Cx, Waker};
@@ -20,5 +21,6 @@ pub use input::{KeyPress, TextInput};
 pub use platform::{WindowButton, is_y7ya, window_button_layout};
 pub use scene::Scene;
 pub use text::{TextStyle, Weight};
-pub use winit::keyboard::{Key, NamedKey};
+pub use widgets::image::{Fit, Image, ImageStyle, fit_rect, image};
+pub use winit::keyboard::{Key, ModifiersState, NamedKey};
 pub use winit::window::CursorIcon;

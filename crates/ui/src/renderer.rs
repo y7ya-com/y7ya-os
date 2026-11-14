@@ -4,6 +4,7 @@ use winit::window::Window;
 
 use super::scene::{Instance, Scene};
 use super::text::{ATLAS_SIZE, AtlasUpload};
+use super::widgets::image::{ImageCache, image_slot};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -24,6 +25,8 @@ pub struct Renderer {
     instances: wgpu::Buffer,
     instance_cap: usize,
     atlas: wgpu::Texture,
+    layout: wgpu::BindGroupLayout,
+    images: ImageCache,
     /// Whether the surface can show the desktop through transparent pixels.
     pub transparent: bool,
 }
@@ -207,6 +210,7 @@ impl Renderer {
 
         let instance_cap = 4096;
         let instances = Self::make_instance_buffer(&device, instance_cap);
+        let images = ImageCache::new(&device);
         Self {
             device,
             queue,
@@ -218,6 +222,8 @@ impl Renderer {
             instances,
             instance_cap,
             atlas,
+            layout,
+            images,
             transparent,
         }
     }
@@ -338,6 +344,7 @@ impl Renderer {
         }
         let globals = Globals { viewport: [logical_size.0, logical_size.1], scale, window_radius };
         self.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
+        self.images.prepare(&self.device, &self.queue, &self.layout, &self.globals, &scene.images);
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
@@ -359,9 +366,22 @@ impl Renderer {
             });
             if !data.is_empty() {
                 pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &self.bind_group, &[]);
                 pass.set_vertex_buffer(0, self.instances.slice(..));
-                pass.draw(0..4, 0..data.len() as u32);
+                // Images each have their own texture: draw in runs that share one.
+                let mut start = 0;
+                while start < data.len() {
+                    let slot = image_slot(&data[start]);
+                    let end = (start + 1..data.len()).find(|&i| image_slot(&data[i]) != slot).unwrap_or(data.len());
+                    let group = match slot {
+                        Some(i) => scene.images.get(i).and_then(|img| self.images.bind_group(img)),
+                        None => Some(&self.bind_group),
+                    };
+                    if let Some(group) = group {
+                        pass.set_bind_group(0, group, &[]);
+                        pass.draw(0..4, start as u32..end as u32);
+                    }
+                    start = end;
+                }
             }
         }
         encoder

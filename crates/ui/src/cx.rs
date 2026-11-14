@@ -32,6 +32,8 @@ pub struct Cx {
     /// Rounded window corners (only applied when `transparent`).
     pub window_radius: f32,
     pub mouse: Point,
+    /// Modifier keys currently held (for clicks; key presses carry their own).
+    pub modifiers: winit::keyboard::ModifiersState,
     pub focused: Option<ElementId>,
     pub clipboard: Option<arboard::Clipboard>,
     pub(crate) hovered: Vec<ElementId>,
@@ -67,6 +69,7 @@ impl Cx {
             transparent: false,
             window_radius: 0.0,
             mouse: Point { x: -1.0, y: -1.0 },
+            modifiers: Default::default(),
             focused: None,
             clipboard: arboard::Clipboard::new().ok(),
             hovered: Vec::new(),
@@ -120,6 +123,17 @@ impl Cx {
 
     pub fn scroll_to_top(&mut self, id: impl Hash) {
         self.scroll.insert(eid(id), 0.0);
+    }
+
+    /// How far `scroll_y` container `id` is scrolled down.
+    pub fn scroll_y(&self, id: impl Hash) -> f32 {
+        self.scroll_offset(eid(id))
+    }
+
+    /// Scrolls container `id` (clamped to its content when next painted).
+    pub fn set_scroll_y(&mut self, id: impl Hash, v: f32) {
+        self.set_scroll_offset(eid(id), v);
+        self.redraw = true;
     }
 
     pub fn caret_visible(&self, input: &TextInput) -> bool {

@@ -56,6 +56,12 @@ pub fn sidebar_selection(cx: &Cx) -> Color {
     }
 }
 
+/// Sidebar icons: tinted (`tint`, usually the accent) in the active window,
+/// gray in an inactive one, as Finder does.
+pub fn sidebar_icon(cx: &Cx, tint: Color) -> Color {
+    if cx.window_focused { tint } else { secondary_label(cx) }
+}
+
 /// Text and icons in toolbars: lighter while the window is inactive.
 pub fn toolbar_ink(cx: &Cx, ink: Color) -> Color {
     if cx.window_focused { ink } else { ink.alpha(ink.a * 0.55) }

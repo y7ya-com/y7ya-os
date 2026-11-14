@@ -72,7 +72,8 @@ impl Waker {
 }
 
 impl Cx {
-    pub(crate) fn new() -> Self {
+    /// A context without a window, for tests and offscreen rendering.
+    pub fn new() -> Self {
         Self {
             text: TextSystem::new(),
             window_size: (0.0, 0.0),

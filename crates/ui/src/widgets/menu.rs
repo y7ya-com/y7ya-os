@@ -28,16 +28,38 @@ pub struct MenuItem<A> {
     pub enabled: bool,
     /// Red text, for actions like "Delete" (used sparingly, as macOS does).
     pub destructive: bool,
+    /// A color dot before the label (calendar and list colors).
+    pub swatch: Option<Color>,
     /// `None` draws a separator.
     pub action: Option<A>,
 }
 
 impl<A> MenuItem<A> {
     pub fn new(label: impl Into<String>, action: A) -> Self {
-        Self { label: label.into(), shortcut: None, checked: false, enabled: true, destructive: false, action: Some(action) }
+        Self {
+            label: label.into(),
+            shortcut: None,
+            checked: false,
+            enabled: true,
+            destructive: false,
+            swatch: None,
+            action: Some(action),
+        }
     }
     pub fn separator() -> Self {
-        Self { label: String::new(), shortcut: None, checked: false, enabled: false, destructive: false, action: None }
+        Self {
+            label: String::new(),
+            shortcut: None,
+            checked: false,
+            enabled: false,
+            destructive: false,
+            swatch: None,
+            action: None,
+        }
+    }
+    pub fn swatch(mut self, c: Color) -> Self {
+        self.swatch = Some(c);
+        self
     }
     pub fn shortcut(mut self, s: impl Into<String>) -> Self {
         self.shortcut = Some(s.into());
@@ -68,6 +90,8 @@ pub struct Menu<A> {
     /// the pointer hands the highlight back to it).
     highlight: Option<(usize, Point)>,
     id: &'static str,
+    /// `pos` is the top-right corner instead (menus under a right-aligned button).
+    right_aligned: bool,
 }
 
 /// What a key did to an open menu.
@@ -82,7 +106,14 @@ pub enum MenuKey<A> {
 
 impl<A: Clone + 'static> Menu<A> {
     pub fn new(pos: Point, items: Vec<MenuItem<A>>) -> Self {
-        Self { pos, items, highlight: None, id: "menu" }
+        Self { pos, items, highlight: None, id: "menu", right_aligned: false }
+    }
+
+    /// Opens with its right edge at `pos.x`, e.g. under a toolbar button at
+    /// the right end of a window.
+    pub fn right_aligned(mut self) -> Self {
+        self.right_aligned = true;
+        self
     }
 
     /// Gives this menu's rows their own ids (when two menus can be open).
@@ -170,8 +201,9 @@ impl<A: Clone + 'static> Menu<A> {
         let style = TextStyle { size: 13.0, ..TextStyle::default() };
         let mut label_w: f32 = 0.0;
         let mut short_w: f32 = 0.0;
+        let swatches = self.items.iter().any(|i| i.swatch.is_some());
         for item in self.items.iter().filter(|i| i.action.is_some()) {
-            label_w = label_w.max(cx.text.measure(&item.label, &style, None, false).0);
+            label_w = label_w.max(cx.text.measure(&item.label, &style, None, false).0 + if swatches { 18.0 } else { 0.0 });
             if let Some(s) = &item.shortcut {
                 short_w = short_w.max(cx.text.measure(s, &style, None, false).0);
             }
@@ -182,7 +214,14 @@ impl<A: Clone + 'static> Menu<A> {
         let height: f32 =
             2.0 * PAD + self.items.iter().map(|i| if i.action.is_some() { ROW_H } else { SEPARATOR_H }).sum::<f32>();
         // Open down and to the right of the click; flip where there's no room.
-        let x = if self.pos.x + width > win_w - EDGE { (self.pos.x - width).max(EDGE) } else { self.pos.x };
+        let left = if self.right_aligned { self.pos.x - width } else { self.pos.x };
+        let x = if left < EDGE {
+            EDGE
+        } else if left + width > win_w - EDGE {
+            (self.pos.x - width).clamp(EDGE, (win_w - width - EDGE).max(EDGE))
+        } else {
+            left
+        };
         let y = if self.pos.y + height > win_h - EDGE { (self.pos.y - height).max(EDGE) } else { self.pos.y };
 
         let highlighted = self.highlighted(cx);
@@ -229,14 +268,18 @@ impl<A: Clone + 'static> Menu<A> {
                 .flex_row()
                 .items_center()
                 .bg_opt(lit.then_some(accent))
-                .child(check)
-                .child(text(item.label.clone()).color(fg).weight(Weight::Regular).truncate().flex_1());
+                .child(check);
+            if swatches {
+                let dot = item.swatch.unwrap_or(Color::TRANSPARENT);
+                row = row.child(div().size(10.0).rounded(5.0).bg(dot).mr(8.0).shrink_0());
+            }
+            row = row.child(text(item.label.clone()).color(fg).weight(Weight::Regular).truncate().flex_1());
             if let Some(s) = &item.shortcut {
                 row = row.child(text(s.clone()).color(sub).shrink_0().ml(gap.min(28.0)));
             }
             if item.enabled {
                 let on_pick = on_pick.clone();
-                row = row.hover_bg(Color::TRANSPARENT).on_click(move |s: &mut S, cx: &mut Cx| on_pick(s, action.clone(), cx));
+                row = row.on_click(move |s: &mut S, cx: &mut Cx| on_pick(s, action.clone(), cx));
             }
             panel = panel.child(row);
         }

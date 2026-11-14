@@ -264,7 +264,7 @@ impl<'a, S: 'static> Table<'a, S> {
             .bg_opt(col.header_bg);
         cell = if right { cell.items_end() } else { cell.items_start() };
         if let Some(s) = &col.summary {
-            cell = cell.child(text(s.clone()).size(15.0).color(st.text).truncate());
+            cell = cell.child(text(s.clone()).size(15.0).color(st.text).tabular().truncate());
         }
         cell = cell.child(label);
         if i > 0 {

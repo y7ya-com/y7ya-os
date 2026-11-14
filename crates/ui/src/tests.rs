@@ -167,6 +167,45 @@ fn scrolling_shows_an_overlay_scrollbar() {
 }
 
 #[test]
+fn one_line_fields_scroll_to_keep_the_caret_in_view() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let mut c = cx(300.0, 100.0);
+    let mut field = crate::TextInput::new(&mut c.text.fonts, TextStyle::default(), true);
+    field.set_text(&mut c.text.fonts, "a long search query that is much wider than the field");
+    field.move_to_end();
+    let field = Rc::new(RefCell::new(field));
+    c.focus("field");
+    let root = || div::<S>().w(300.0).h(100.0).child(div().absolute(20.0, 20.0).w(120.0).h(20.0).child(crate::input("field", &field).w_full()));
+    render(root(), &mut c);
+    let caret = c.ime_area.expect("caret");
+    assert!(caret.x >= 20.0 && caret.right() <= 142.0, "caret at {caret:?}");
+    // Back at the start, the view scrolls back too.
+    field.borrow_mut().handle_key(&mut c.text.fonts, &key(winit::keyboard::Key::Named(winit::keyboard::NamedKey::Home), false, false), &mut None);
+    render(root(), &mut c);
+    let caret = c.ime_area.expect("caret");
+    assert!((caret.x - 20.0).abs() < 0.5, "caret at {caret:?}");
+}
+
+#[test]
+fn menu_rows_highlight_under_the_pointer() {
+    use crate::widgets::{Menu, MenuItem};
+    let mut c = cx(400.0, 300.0);
+    let menu = Menu::new(Point { x: 10.0, y: 10.0 }, vec![MenuItem::new("Open", 1), MenuItem::new("Rename", 2)]);
+    let accent = crate::native::accent(&c).premultiplied();
+    let lit = |scene: &Scene| scene.instances().any(|i| i.params[3] == 0.0 && i.color == accent);
+    let root = |m: &Menu<i32>, c: &mut Cx| div::<S>().w(400.0).h(300.0).child(m.render(c, |_, _, _| {}, |_, _| {}));
+    let (frame, scene) = render(root(&menu, &mut c), &mut c);
+    assert!(!lit(&scene));
+    // Point at the second row (pad 5 + one 24pt row + half a row).
+    c.mouse = Point { x: 60.0, y: 10.0 + 5.0 + 24.0 + 12.0 };
+    c.hovered = frame.hits(c.mouse).iter().filter_map(|h| h.id).collect();
+    assert_eq!(menu.highlighted(&c), Some(1));
+    let (_, scene) = render(root(&menu, &mut c), &mut c);
+    assert!(lit(&scene), "the hovered row is filled with the accent");
+}
+
+#[test]
 fn caret_blinks_only_in_an_active_window() {
     use std::time::{Duration, Instant};
     let mut c = cx(100.0, 100.0);

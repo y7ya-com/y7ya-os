@@ -224,6 +224,10 @@ pub trait Styled: Sized {
         self.layout_mut().size.height = Dimension::percent(1.0);
         self
     }
+    fn min_w(mut self, v: f32) -> Self {
+        self.layout_mut().min_size.width = LengthPercentageAuto::length(v);
+        self
+    }
     fn min_h(mut self, v: f32) -> Self {
         self.layout_mut().min_size.height = LengthPercentageAuto::length(v);
         self

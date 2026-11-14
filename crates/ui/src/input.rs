@@ -65,6 +65,8 @@ pub struct TextInput {
     /// Set when the caret moved and should be scrolled into view.
     pub(crate) reveal_caret: bool,
     width: f32,
+    /// How far a one-line field is scrolled sideways to keep the caret in view.
+    scroll_x: f32,
 }
 
 impl TextInput {
@@ -88,6 +90,7 @@ impl TextInput {
             last_activity: Instant::now(),
             reveal_caret: false,
             width: 0.0,
+            scroll_x: 0.0,
         }
     }
 
@@ -419,7 +422,7 @@ impl TextInput {
 
     /// `local` is relative to the input's top-left corner.
     pub fn mouse_down(&mut self, fonts: &mut FontSystem, local: Point, clicks: u32, extend: bool) {
-        let (x, y) = (local.x as i32, local.y as i32);
+        let (x, y) = ((local.x + self.scroll_x) as i32, local.y as i32);
         if extend {
             if self.editor.selection() == Selection::None {
                 let c = self.editor.cursor();
@@ -438,7 +441,8 @@ impl TextInput {
     }
 
     pub fn mouse_drag(&mut self, fonts: &mut FontSystem, local: Point) {
-        self.editor.action(fonts, Action::Drag { x: local.x as i32, y: local.y as i32 });
+        let x = (local.x + self.scroll_x) as i32;
+        self.editor.action(fonts, Action::Drag { x, y: local.y as i32 });
         self.last_activity = Instant::now();
         self.reveal_caret = true;
     }
@@ -472,7 +476,12 @@ impl TextInput {
             }
         }
         self.editor.shape_as_needed(fonts, false);
-        let origin = Point { x: bounds.x, y: bounds.y };
+        if self.single_line {
+            self.scroll_x = if focused { self.follow_caret(bounds.w) } else { 0.0 };
+            // Text past the ends is cut off (leaving room for the caret at 0).
+            scene.push_clip(Bounds::new(bounds.x - 1.0, bounds.y - 2.0, bounds.w + 2.0, bounds.h + 4.0));
+        }
+        let origin = Point { x: bounds.x - self.scroll_x, y: bounds.y };
 
         if self.is_empty() && !self.placeholder.is_empty() {
             let mut buffer = Buffer::new(fonts, self.style.metrics());
@@ -513,10 +522,33 @@ impl TextInput {
             Bounds::new(origin.x, origin.y, 2.0, lh)
         });
         if focused && caret_on {
+            // Centered on the insertion point, so it doesn't sit on the next glyph.
             let inset = (caret.h * 0.1).round();
-            let r = Bounds::new(caret.x.round(), caret.y + inset, 2.0, caret.h - 2.0 * inset);
+            let r = Bounds::new(caret.x.round() - 1.0, caret.y + inset, 2.0, caret.h - 2.0 * inset);
             scene.rect(r, self.caret_color, 1.0);
         }
+        if self.single_line {
+            scene.pop_clip();
+        }
         Some(caret)
+    }
+
+    /// The sideways scroll that keeps the caret of a one-line field inside `width`.
+    fn follow_caret(&self, width: f32) -> f32 {
+        let cursor = self.editor.cursor();
+        let (caret_x, line_w) = self.editor.with_buffer(|b| {
+            let run = b.layout_runs().next();
+            let x = run.as_ref().and_then(|r| r.cursor_position(&cursor)).unwrap_or(0.0);
+            (x, run.map_or(0.0, |r| r.line_w))
+        });
+        let room = (width - 2.0).max(1.0);
+        let mut s = self.scroll_x;
+        if caret_x - s > room {
+            s = caret_x - room;
+        } else if caret_x < s {
+            s = caret_x;
+        }
+        // Don't leave empty space at the end once the text fits again.
+        s.min((line_w - room).max(0.0)).max(0.0)
     }
 }

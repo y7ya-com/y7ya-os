@@ -17,6 +17,15 @@ taffy = "0.15.1"
 wgpu = { version = "30.0.2", default-features = false, features = ["std", "parking_lot", "vulkan", "gles", "wgsl"] }
 winit = "0.30.13"
 
+# Smaller debug builds: line numbers in backtraces, no full debug info, and
+# dependencies built optimized (they rarely change).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
+
 [profile.release]
 lto = "thin"
 strip = true

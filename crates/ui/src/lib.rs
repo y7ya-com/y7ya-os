@@ -13,6 +13,8 @@ mod renderer;
 mod scene;
 mod scroll;
 mod text;
+#[cfg(test)]
+mod tests;
 mod widget;
 pub mod widgets;
 

@@ -83,10 +83,18 @@ struct Runner<A: App> {
     pressed_widget: Option<(Rc<RefCell<dyn Widget>>, Bounds)>,
     last_click: (Instant, Point, u32),
     cursor: CursorIcon,
+    /// `App::on_exit` has run.
+    exited: bool,
 }
 
 pub fn run<A: App>(opts: WindowOptions, make: impl FnOnce(&mut Cx) -> A + 'static) {
-    let event_loop = EventLoop::new().expect("event loop");
+    let event_loop = match EventLoop::new() {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("{}: no display to connect to ({e})", opts.app_id);
+            return;
+        }
+    };
     let mut runner = Runner {
         opts,
         make: Some(Box::new(make)),
@@ -102,9 +110,14 @@ pub fn run<A: App>(opts: WindowOptions, make: impl FnOnce(&mut Cx) -> A + 'stati
         pressed_widget: None,
         last_click: (Instant::now() - Duration::from_secs(10), Point::default(), 0),
         cursor: CursorIcon::Default,
+        exited: false,
     };
     runner.cx.waker = super::cx::Waker(Some(event_loop.create_proxy()), None);
-    event_loop.run_app(&mut runner).expect("run app");
+    if let Err(e) = event_loop.run_app(&mut runner) {
+        // The compositor went away under us: save what we can and leave quietly.
+        eprintln!("{}: lost the display ({e})", runner.opts.app_id);
+    }
+    runner.exit_app();
 }
 
 /// Renders one frame offscreen to a PNG, to check the look without a window.
@@ -153,6 +166,14 @@ fn detect_dark(window: &Window) -> bool {
 const RESIZE_MARGIN: f32 = 6.0;
 
 impl<A: App> Runner<A> {
+    /// Runs `App::on_exit` once, however the window goes away.
+    fn exit_app(&mut self) {
+        if let (Some(app), false) = (self.app.as_mut(), self.exited) {
+            self.exited = true;
+            app.on_exit();
+        }
+    }
+
     fn resize_direction(&self, p: Point) -> Option<ResizeDirection> {
         if self.cx.maximized || self.opts.decorations {
             return None;
@@ -206,8 +227,8 @@ impl<A: App> Runner<A> {
                         if !app.should_close(&mut self.cx) {
                             continue;
                         }
-                        app.on_exit();
                     }
+                    self.exit_app();
                     std::process::exit(0);
                 }
                 WindowCommand::Resize(w, h) => {
@@ -505,8 +526,8 @@ impl<A: App> ApplicationHandler for Runner<A> {
                         self.after_event();
                         return;
                     }
-                    app.on_exit();
                 }
+                self.exit_app();
                 event_loop.exit();
             }
             WindowEvent::Resized(size) => {

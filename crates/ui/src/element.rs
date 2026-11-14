@@ -19,10 +19,36 @@ use super::widget::{Widget, WidgetEl};
 
 pub type ElementId = u64;
 
+/// Hashes `v` into an id. A bare `u64` is taken to be an id already (say one
+/// from an earlier `eid` call) and kept as is, so `.id(eid(x))`, `.id(x)`
+/// and `cx.hovered(x)` all agree.
 pub fn eid(v: impl Hash) -> ElementId {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut h = IdHasher::default();
     v.hash(&mut h);
     h.finish()
+}
+
+/// `DefaultHasher`, except that a lone `write_u64` passes straight through.
+#[derive(Default)]
+struct IdHasher {
+    inner: std::collections::hash_map::DefaultHasher,
+    writes: u32,
+    raw: u64,
+}
+
+impl Hasher for IdHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        self.writes += 2;
+        self.inner.write(bytes);
+    }
+    fn write_u64(&mut self, v: u64) {
+        self.writes += 1;
+        self.raw = v;
+        self.inner.write_u64(v);
+    }
+    fn finish(&self) -> u64 {
+        if self.writes == 1 { self.raw } else { self.inner.finish() }
+    }
 }
 
 pub type Handler<S> = Rc<dyn Fn(&mut S, &mut Cx)>;
@@ -91,7 +117,9 @@ pub struct Div<S> {
 pub fn div<S>() -> Div<S> {
     Div {
         id: None,
-        layout: Style { display: Display::Flex, ..Default::default() },
+        // Relative, so absolutely positioned children (`inset_0`, `absolute`)
+        // are placed and sized against this div rather than the window.
+        layout: Style { display: Display::Flex, position: Position::Relative, ..Default::default() },
         bg: None,
         hover_bg: None,
         border: None,
@@ -667,6 +695,15 @@ fn abs_bounds(tree: &TaffyTree<Measure>, node: NodeId, origin: Point) -> Bounds 
     Bounds::new(origin.x + l.location.x, origin.y + l.location.y, l.size.width, l.size.height)
 }
 
+/// Like `abs_bounds`, minus padding and border: where a leaf's content goes.
+fn content_bounds(tree: &TaffyTree<Measure>, node: NodeId, origin: Point) -> Bounds {
+    let b = abs_bounds(tree, node, origin);
+    let l = tree.layout(node).unwrap();
+    let (left, top) = (l.padding.left + l.border.left, l.padding.top + l.border.top);
+    let (right, bottom) = (l.padding.right + l.border.right, l.padding.bottom + l.border.bottom);
+    Bounds::new(b.x + left, b.y + top, (b.w - left - right).max(0.0), (b.h - top - bottom).max(0.0))
+}
+
 fn paint<'e, S>(
     el: &'e AnyElement<S>,
     node: NodeId,
@@ -685,17 +722,17 @@ fn paint<'e, S>(
             paint_div(d, node, origin, style, pcx, deferred, false);
         }
         AnyElement::Text(t) => {
-            let b = abs_bounds(pcx.tree, node, origin);
+            let b = content_bounds(pcx.tree, node, origin);
             if b.intersect(&pcx.scene.clip()).h <= 0.0 {
                 return;
             }
             let style = t.overrides.apply(style);
             let scale = pcx.cx.scale;
-            let width = if t.truncate { Some(b.w) } else { Some(b.w) };
-            pcx.cx.text.paint(pcx.scene, &t.content, &style, width, t.truncate, Point { x: b.x, y: b.y }, scale);
+            pcx.cx.text.paint(pcx.scene, &t.content, &style, Some(b.w), t.truncate, Point { x: b.x, y: b.y }, scale);
         }
         AnyElement::Input(i) => {
-            let b = abs_bounds(pcx.tree, node, origin);
+            let outer = abs_bounds(pcx.tree, node, origin);
+            let b = content_bounds(pcx.tree, node, origin);
             let focused = pcx.cx.focused == Some(i.id);
             let caret_on = pcx.cx.caret_visible(&i.state.borrow());
             let scale = pcx.cx.scale;
@@ -723,7 +760,7 @@ fn paint<'e, S>(
             let clip = pcx.scene.clip();
             pcx.frame.hitboxes.push(Hitbox {
                 id: Some(i.id),
-                bounds: b.intersect(&clip),
+                bounds: outer.intersect(&clip),
                 layer: pcx.scene.layer(),
                 on_mouse_down: None,
                 on_click: None,

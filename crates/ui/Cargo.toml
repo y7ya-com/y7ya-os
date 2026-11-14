@@ -16,6 +16,10 @@ taffy = { workspace = true }
 wgpu = { workspace = true }
 winit = { workspace = true }
 
+[[test]]
+name = "display_loss"
+harness = false
+
 # The layer-shell runner (menu bars, panels): winit can't make layer surfaces.
 [target.'cfg(target_os = "linux")'.dependencies]
 raw-window-handle = "0.6.2"

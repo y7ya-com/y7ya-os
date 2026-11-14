@@ -15,6 +15,7 @@ use super::geom::{Bounds, Color, Point};
 use super::input::TextInput;
 use super::scene::Scene;
 use super::text::{TextStyle, Weight};
+use super::widget::{Widget, WidgetEl};
 
 pub type ElementId = u64;
 
@@ -57,6 +58,7 @@ pub enum AnyElement<S> {
     Text(Text),
     Input(InputEl),
     Canvas(Canvas),
+    Widget(WidgetEl),
 }
 
 // ---------------------------------------------------------------------------
@@ -525,6 +527,7 @@ pub struct Hitbox<S> {
     pub focusable: bool,
     pub cursor: Option<CursorIcon>,
     pub input: Option<(Rc<RefCell<TextInput>>, Bounds)>,
+    pub widget: Option<(Rc<RefCell<dyn Widget>>, Bounds)>,
 }
 
 pub struct ScrollRegion {
@@ -568,6 +571,7 @@ fn build<S>(el: &AnyElement<S>, tree: &mut TaffyTree<Measure>, inherited: TextSt
         }
         AnyElement::Input(i) => tree.new_leaf_with_context(i.layout.clone(), Measure::Input(i.state.clone())).unwrap(),
         AnyElement::Canvas(c) => tree.new_leaf(c.layout.clone()).unwrap(),
+        AnyElement::Widget(w) => tree.new_leaf(w.layout.clone()).unwrap(),
     }
 }
 
@@ -729,11 +733,35 @@ fn paint<'e, S>(
                 focusable: true,
                 cursor: Some(CursorIcon::Text),
                 input: Some((i.state.clone(), b)),
+                widget: None,
             });
         }
         AnyElement::Canvas(c) => {
             let b = abs_bounds(pcx.tree, node, origin);
             (c.paint)(pcx.scene, b);
+        }
+        AnyElement::Widget(w) => {
+            let b = abs_bounds(pcx.tree, node, origin);
+            let focused = pcx.cx.focused == Some(w.id);
+            let caret = w.state.borrow_mut().paint(pcx.cx, pcx.scene, b, focused);
+            if focused && caret.is_some() {
+                pcx.cx.ime_area = caret;
+            }
+            let clip = pcx.scene.clip();
+            pcx.frame.hitboxes.push(Hitbox {
+                id: Some(w.id),
+                bounds: b.intersect(&clip),
+                layer: pcx.scene.layer(),
+                on_mouse_down: None,
+                on_click: None,
+                on_right_click: None,
+                on_double_click: None,
+                window_drag: false,
+                focusable: true,
+                cursor: w.cursor,
+                input: None,
+                widget: Some((w.state.clone(), b)),
+            });
         }
     }
 }
@@ -791,6 +819,7 @@ fn paint_div<'e, S>(
             focusable: d.focusable,
             cursor: d.cursor,
             input: None,
+            widget: None,
         });
     }
 

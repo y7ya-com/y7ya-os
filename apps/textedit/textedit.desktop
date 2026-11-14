@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=TextEdit
+Comment=Write and edit plain text documents
+Exec=textedit %F
+Icon=accessories-text-editor
+Terminal=false
+Categories=Utility;TextEditor;
+MimeType=text/plain;
+StartupWMClass=textedit

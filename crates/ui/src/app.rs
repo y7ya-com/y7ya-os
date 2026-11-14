@@ -17,6 +17,7 @@ use super::input::{KeyPress, TextInput};
 use super::renderer::Renderer;
 use super::scene::Scene;
 use super::text::TextStyle;
+use super::widget::Widget;
 
 pub trait App: Sized + 'static {
     fn render(&mut self, cx: &mut Cx) -> Div<Self>;
@@ -35,6 +36,11 @@ pub trait App: Sized + 'static {
     /// Another thread called [`Waker::wake`](super::cx::Waker::wake).
     fn on_external(&mut self, _cx: &mut Cx) {}
     fn on_exit(&mut self) {}
+    /// The window is about to close. Return false to keep it open (e.g. to
+    /// ask about unsaved changes first).
+    fn should_close(&mut self, _cx: &mut Cx) -> bool {
+        true
+    }
 }
 
 pub struct WindowOptions {
@@ -61,6 +67,7 @@ struct Runner<A: App> {
     modifiers: ModifiersState,
     pressed_click: Option<(Handler<A>, Bounds)>,
     pressed_input: Option<(Rc<RefCell<TextInput>>, Bounds)>,
+    pressed_widget: Option<(Rc<RefCell<dyn Widget>>, Bounds)>,
     last_click: (Instant, Point, u32),
     cursor: CursorIcon,
 }
@@ -79,6 +86,7 @@ pub fn run<A: App>(opts: WindowOptions, make: impl FnOnce(&mut Cx) -> A + 'stati
         modifiers: ModifiersState::empty(),
         pressed_click: None,
         pressed_input: None,
+        pressed_widget: None,
         last_click: (Instant::now() - Duration::from_secs(10), Point::default(), 0),
         cursor: CursorIcon::Default,
     };
@@ -182,9 +190,22 @@ impl<A: App> Runner<A> {
             match cmd {
                 WindowCommand::Close => {
                     if let Some(app) = self.app.as_mut() {
+                        if !app.should_close(&mut self.cx) {
+                            continue;
+                        }
                         app.on_exit();
                     }
                     std::process::exit(0);
+                }
+                WindowCommand::Resize(w, h) => {
+                    // Some platforms apply the size at once instead of sending `Resized`.
+                    if let Some(size) = window.request_inner_size(LogicalSize::new(w, h)) {
+                        if let Some(r) = self.renderer.as_mut() {
+                            r.resize(size.width, size.height);
+                        }
+                        self.cx.window_size = (size.width as f32 / self.cx.scale, size.height as f32 / self.cx.scale);
+                        self.cx.redraw = true;
+                    }
                 }
                 WindowCommand::Minimize => window.set_minimized(true),
                 WindowCommand::ToggleMaximize => window.set_maximized(!window.is_maximized()),
@@ -203,6 +224,11 @@ impl<A: App> Runner<A> {
             .iter()
             .find(|h| h.id == Some(focused) && h.input.is_some())
             .and_then(|h| h.input.as_ref().map(|(s, _)| s.clone()))
+    }
+
+    fn focused_widget(&self) -> Option<Rc<RefCell<dyn Widget>>> {
+        let focused = self.cx.focused?;
+        self.frame.hitboxes.iter().find(|h| h.id == Some(focused)).and_then(|h| h.widget.as_ref().map(|(w, _)| w.clone()))
     }
 
     fn mouse_down(&mut self, button: MouseButton) {
@@ -250,6 +276,7 @@ impl<A: App> Runner<A> {
             Call(Handler<A>),
             Press(Handler<A>, Bounds),
             Input(Rc<RefCell<TextInput>>, Bounds),
+            Widget(Rc<RefCell<dyn Widget>>, Bounds),
             Drag,
             Maximize,
         }
@@ -257,6 +284,10 @@ impl<A: App> Runner<A> {
         for h in &hits {
             if let Some((state, b)) = &h.input {
                 acts.push(Act::Input(state.clone(), *b));
+                break;
+            }
+            if let Some((state, b)) = &h.widget {
+                acts.push(Act::Widget(state.clone(), *b));
                 break;
             }
             let mut handled = false;
@@ -288,6 +319,11 @@ impl<A: App> Runner<A> {
                     state.borrow_mut().mouse_down(&mut self.cx.text.fonts, local, clicks.min(3), self.modifiers.shift_key());
                     self.pressed_input = Some((state, b));
                 }
+                Act::Widget(state, b) => {
+                    let local = Point { x: p.x - b.x, y: p.y - b.y };
+                    state.borrow_mut().mouse_down(local, clicks.min(3), self.modifiers.shift_key(), &mut self.cx);
+                    self.pressed_widget = Some((state, b));
+                }
                 Act::Drag => {
                     let _ = window.drag_window();
                 }
@@ -305,6 +341,7 @@ impl<A: App> Runner<A> {
             }
         }
         self.pressed_input = None;
+        self.pressed_widget = None;
         self.cx.redraw = true;
     }
 
@@ -314,6 +351,12 @@ impl<A: App> Runner<A> {
             MouseScrollDelta::PixelDelta(p) => p.y as f32 / self.cx.scale,
         };
         let p = self.cx.mouse;
+        if let Some((w, _)) = self.frame.hits(p).iter().find_map(|h| h.widget.clone()) {
+            if w.borrow_mut().scroll(dy, &mut self.cx) {
+                self.cx.redraw = true;
+                return;
+            }
+        }
         let top = self.frame.scrolls.iter().filter(|s| s.bounds.contains(p)).map(|s| s.layer).max();
         let target = self.frame.scrolls.iter().rev().find(|s| Some(s.layer) == top && s.bounds.contains(p));
         if let Some(s) = target {
@@ -325,6 +368,7 @@ impl<A: App> Runner<A> {
 
     fn key(&mut self, kp: KeyPress) {
         let focused = self.focused_input();
+        let widget = self.focused_widget();
         let Some(app) = self.app.as_mut() else { return };
         self.cx.redraw = true;
         if app.on_key(&kp, &mut self.cx) {
@@ -333,6 +377,10 @@ impl<A: App> Runner<A> {
         if let (Some(state), Some(id)) = (focused, self.cx.focused) {
             let out = state.borrow_mut().handle_key(&mut self.cx.text.fonts, &kp, &mut self.cx.clipboard);
             if out.changed {
+                app.on_input(id, &mut self.cx);
+            }
+        } else if let (Some(w), Some(id)) = (widget, self.cx.focused) {
+            if w.borrow_mut().key(&kp, &mut self.cx) {
                 app.on_input(id, &mut self.cx);
             }
         }
@@ -371,6 +419,7 @@ impl<S> super::element::Hitbox<S> {
             && self.cursor.is_none()
             && !self.focusable
             && self.input.is_none()
+            && self.widget.is_none()
     }
 }
 
@@ -433,6 +482,10 @@ impl<A: App> ApplicationHandler for Runner<A> {
         match event {
             WindowEvent::CloseRequested => {
                 if let Some(app) = self.app.as_mut() {
+                    if !app.should_close(&mut self.cx) {
+                        self.after_event();
+                        return;
+                    }
                     app.on_exit();
                 }
                 event_loop.exit();
@@ -471,6 +524,11 @@ impl<A: App> ApplicationHandler for Runner<A> {
                     state.borrow_mut().mouse_drag(&mut self.cx.text.fonts, local);
                     self.cx.redraw = true;
                 }
+                if let Some((w, b)) = &self.pressed_widget {
+                    let local = Point { x: self.cx.mouse.x - b.x, y: self.cx.mouse.y - b.y };
+                    w.borrow_mut().mouse_drag(local, &mut self.cx);
+                    self.cx.redraw = true;
+                }
                 self.update_hover();
             }
             WindowEvent::CursorLeft { .. } => {
@@ -507,8 +565,11 @@ impl<A: App> ApplicationHandler for Runner<A> {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let mut wake: Option<Instant> = self.app.as_ref().and_then(|a| a.next_wake());
-        if let Some(state) = self.focused_input() {
-            let since = state.borrow().last_activity;
+        let since = match self.focused_input() {
+            Some(state) => Some(state.borrow().last_activity),
+            None => self.focused_widget().and_then(|w| w.borrow().last_activity()),
+        };
+        if let Some(since) = since {
             let n = (since.elapsed().as_millis() / CARET_BLINK_MS + 1) as u32;
             let next = since + Duration::from_millis(CARET_BLINK_MS as u64) * n;
             wake = Some(wake.map_or(next, |w| w.min(next)));

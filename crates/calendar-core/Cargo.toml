@@ -1,0 +1,8 @@
+[package]
+name = "calendar-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = { workspace = true }
+y7-sync = { path = "../y7-sync" }

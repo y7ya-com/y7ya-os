@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Calendar
+Comment=Day, week, month and year calendar that syncs with your phone
+Exec=calendar %f
+Icon=office-calendar
+Terminal=false
+Categories=Office;Calendar;
+MimeType=text/calendar;
+StartupWMClass=calendar

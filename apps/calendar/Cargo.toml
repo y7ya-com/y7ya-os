@@ -1,0 +1,11 @@
+[package]
+name = "calendar"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+calendar-core = { path = "../../crates/calendar-core" }
+chrono = { workspace = true }
+sync-ui = { path = "../../crates/sync-ui" }
+ui = { path = "../../crates/ui" }
+y7-sync = { path = "../../crates/y7-sync" }

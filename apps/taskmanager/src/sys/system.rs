@@ -111,6 +111,9 @@ pub struct Gpu {
     pub util: History,
     /// (used, total) dedicated memory, where the driver reports it.
     pub vram: Option<(u64, u64)>,
+    /// `util` is the share of time the GPU was awake (Intel's idle residency),
+    /// not engine load: an idle desktop can keep it awake.
+    pub active_time: bool,
     source: GpuSource,
     device: PathBuf,
 }
@@ -375,7 +378,16 @@ fn find_gpu() -> Option<Gpu> {
             (Some(v), Some(d)) => pci_name(v, d),
             _ => None,
         };
-        return Some(Gpu { name: name.unwrap_or_else(|| "GPU".into()), driver, util: History::default(), vram: None, source, device });
+        let active_time = matches!(source, GpuSource::IdleResidency(..));
+        return Some(Gpu {
+            name: name.unwrap_or_else(|| "GPU".into()),
+            driver,
+            util: History::default(),
+            vram: None,
+            active_time,
+            source,
+            device,
+        });
     }
     None
 }

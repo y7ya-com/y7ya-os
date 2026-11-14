@@ -81,7 +81,7 @@ impl TaskManager {
             Column::new("Disk").width(96.0).right().summary(format!("{disk:.0}%"), Some(t.heat(disk / 100.0))),
         ];
         let style = self.table_style(t, cx);
-        let table = Table::new(&self.user_table, &columns, rows.len(), style).render(cx, |i| {
+        let table = Table::new(&self.user_table, &columns, rows.len(), style).render(cx, |i, _| {
             let (sel, ui) = rows[i];
             let selected = self.user_sel == Some(sel);
             let ink = if selected { style.selection_text } else { t.text };

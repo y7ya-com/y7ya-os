@@ -23,8 +23,16 @@ pub fn entry_keys(text: &str) -> HashMap<String, String> {
     out
 }
 
+/// Programs that only launch something else: an `Exec=` running one of these
+/// says nothing about which process is the app.
+const LAUNCHERS: [&str; 16] = [
+    "sh", "bash", "zsh", "dash", "fish", "python", "python3", "perl", "sudo", "pkexec", "flatpak", "gtk-launch",
+    "xdg-open", "systemctl", "kioclient", "kstart",
+];
+
 /// The program an `Exec=` line runs, as a bare file name: skips `env` and its
-/// assignments and strips quotes and directories.
+/// assignments and strips quotes and directories. `None` for shells and other
+/// launchers.
 pub fn exec_binary(exec: &str) -> Option<String> {
     let mut words = exec.split_whitespace().map(|w| w.trim_matches('"'));
     let mut w = words.next()?;
@@ -32,7 +40,7 @@ pub fn exec_binary(exec: &str) -> Option<String> {
         w = words.find(|w| !w.contains('=') && !w.starts_with('-'))?;
     }
     let name = Path::new(w).file_name()?.to_string_lossy().to_string();
-    (!name.is_empty() && !name.starts_with('%')).then_some(name)
+    (!name.is_empty() && !name.starts_with('%') && !LAUNCHERS.contains(&name.as_str())).then_some(name)
 }
 
 #[derive(Clone, Debug)]
@@ -150,6 +158,8 @@ mod tests {
         assert_eq!(exec_binary("/usr/lib/firefox/firefox %u").as_deref(), Some("firefox"));
         assert_eq!(exec_binary("env GDK_BACKEND=x11 \"/opt/app/bin/app\" --flag").as_deref(), Some("app"));
         assert_eq!(exec_binary("").as_deref(), None);
+        // A shell wrapper must not claim every shell process.
+        assert_eq!(exec_binary("sh -c \"sudo -n /usr/local/bin/x && systemctl reboot\"").as_deref(), None);
     }
 
     #[test]

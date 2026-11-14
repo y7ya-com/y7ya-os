@@ -82,7 +82,7 @@ impl TaskManager {
                     (col, matches!(col, DCol::Cpu | DCol::Memory | DCol::Threads))
                 };
             })
-            .render(cx, |i| {
+            .render(cx, |i, _| {
                 let p = rows[i];
                 let pid = p.pid;
                 let selected = self.detail_sel == Some(pid);

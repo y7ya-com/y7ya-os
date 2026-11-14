@@ -299,14 +299,15 @@ impl TaskManager {
             PerfItem::Gpu => {
                 let g = sys.gpu.as_ref().unwrap();
                 let graph = Graph::new(HISTORY, 100.0).series(Series::new(g.util.values(), color).fill(fill));
-                let mut stats = vec![Self::stat("Utilization", format!("{:.0}%", g.util.last()), t)];
+                let (label, caption) = if g.active_time { ("Active time", "% Active time (awake, not idle)") } else { ("Utilization", "% Utilization (3D)") };
+                let mut stats = vec![Self::stat(label, format!("{:.0}%", g.util.last()), t)];
                 if let Some((used, total)) = g.vram {
                     stats.push(Self::stat("Dedicated memory", format!("{:.1}/{:.1} GB", used as f64 / GIB, total as f64 / GIB), t));
                 }
                 (
                     "GPU 0".into(),
                     g.name.clone(),
-                    vec![self.big_graph("% Utilization (3D)", "100%", graph, t, color, 1.0)],
+                    vec![self.big_graph(caption, "100%", graph, t, color, 1.0)],
                     stats,
                     vec![("Driver", g.driver.clone()), ("Memory", if g.vram.is_some() { "Dedicated".into() } else { "Shared with system".into() })],
                 )

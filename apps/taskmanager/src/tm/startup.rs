@@ -33,7 +33,7 @@ impl TaskManager {
             Column::new("Status").width(130.0),
         ];
         let style = self.table_style(t, cx);
-        let table = Table::new(&self.startup_table, &columns, rows.len(), style).render(cx, |i| {
+        let table = Table::new(&self.startup_table, &columns, rows.len(), style).render(cx, |i, _| {
             let e = rows[i];
             let selected = self.startup_sel.as_deref() == Some(e.file.as_str());
             let secondary = if selected { style.selection_text.alpha(0.75) } else { t.text_secondary };

@@ -3,8 +3,8 @@
 //!
 //! Each process gets an app key: the installed application its executable,
 //! name or systemd launch unit resolves to. Helpers without one inherit their
-//! parent's key when they were launched in the same unit (browser renderers,
-//! shells in a terminal tab). Which keys count as apps comes from the
+//! parent's key when both run in the same systemd app unit (shells in a
+//! terminal tab, crash handlers). Which keys count as apps comes from the
 //! compositor's window list when it shares one ([`super::toplevel`]); otherwise
 //! from whether the app's processes have a display in their environment.
 
@@ -76,7 +76,9 @@ pub fn group(procs: &[Process], index: &AppIndex, windows: Option<&[Toplevel]>) 
         let mut k = own(p);
         if k.is_none() && depth < 64 {
             if let Some(parent) = by_pid.get(&p.ppid) {
-                if parent.app_id == p.app_id {
+                // Only within one launch unit: without unit information a
+                // shell would hand its key to everything it ever started.
+                if p.app_id.is_some() && parent.app_id == p.app_id {
                     k = key_of(p.ppid, by_pid, keys, own, depth + 1);
                 }
             }
@@ -199,6 +201,8 @@ mod tests {
             proc(40, 1, "pipewire", false, None),
             // Launched from Konsole but in its own unit: not Konsole's.
             proc(50, 11, "mystery", true, Some("other")),
+            // No unit information: children don't inherit an app.
+            proc(60, 20, "helper", true, None),
         ]
     }
 
@@ -211,7 +215,7 @@ mod tests {
         assert_eq!(g.apps[0].pids, [20, 21]);
         let mut bg = g.background.clone();
         bg.sort();
-        assert_eq!(bg, [1, 30, 40, 50]);
+        assert_eq!(bg, [1, 30, 40, 50, 60]);
     }
 
     #[test]

@@ -65,7 +65,7 @@ impl TaskManager {
                 let col = COLS[c];
                 s.service_sort = if s.service_sort.0 == col { (col, !s.service_sort.1) } else { (col, false) };
             })
-            .render(cx, |i| {
+            .render(cx, |i, _| {
                 let svc = rows[i];
                 let unit = svc.unit.clone();
                 let selected = self.service_sel.as_deref() == Some(unit.as_str());

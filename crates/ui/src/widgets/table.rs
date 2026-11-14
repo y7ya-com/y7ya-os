@@ -150,6 +150,7 @@ pub struct Table<'a, S> {
     sort: Option<(usize, bool)>,
     on_sort: Option<Rc<dyn Fn(&mut S, usize, &mut Cx)>>,
     style: TableStyle,
+    header: bool,
 }
 
 const H_PAD: f32 = 8.0;
@@ -158,12 +159,18 @@ const ROW_INSET: f32 = 6.0;
 impl<'a, S: 'static> Table<'a, S> {
     /// A table of `len` rows; rows are produced on demand by `render`'s callback.
     pub fn new(state: &'a TableState, columns: &'a [Column], len: usize, style: TableStyle) -> Self {
-        Self { state, columns, len, sort: None, on_sort: None, style }
+        Self { state, columns, len, sort: None, on_sort: None, style, header: true }
     }
 
     /// The sorted column and whether it's descending (draws the chevron).
     pub fn sort(mut self, sort: Option<(usize, bool)>) -> Self {
         self.sort = sort;
+        self
+    }
+
+    /// A plain list: no header row.
+    pub fn headerless(mut self) -> Self {
+        self.header = false;
         self
     }
 
@@ -173,7 +180,8 @@ impl<'a, S: 'static> Table<'a, S> {
         self
     }
 
-    pub fn render(self, cx: &mut Cx, mut row: impl FnMut(usize) -> Row<S>) -> Div<S> {
+    /// Builds the table, calling `row` for each row in view.
+    pub fn render(self, cx: &mut Cx, mut row: impl FnMut(usize, &mut Cx) -> Row<S>) -> Div<S> {
         let st = self.style;
         let id = self.state.id;
         let two_line = self.columns.iter().any(|c| c.summary.is_some());
@@ -205,7 +213,8 @@ impl<'a, S: 'static> Table<'a, S> {
 
         let mut body = div().id(id).scroll_y().flex_1().flex_col().child(div().h(first as f32 * row_h).shrink_0());
         for i in first..last {
-            body = body.child(self.row(i, row(i), cx));
+            let r = row(i, cx);
+            body = body.child(self.row(i, r, cx));
         }
         body = body.child(div().h((self.len - last) as f32 * row_h + 4.0).shrink_0());
 
@@ -214,7 +223,7 @@ impl<'a, S: 'static> Table<'a, S> {
             .flex_1()
             .flex_col()
             .min_w_0()
-            .child(header)
+            .child_if(self.header, || header.into())
             .child(
                 div()
                     .flex_1()

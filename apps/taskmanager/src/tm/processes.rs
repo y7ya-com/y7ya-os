@@ -204,7 +204,7 @@ impl TaskManager {
                     (col, !matches!(col, PCol::Name | PCol::Status))
                 };
             })
-            .render(cx, |i| self.proc_row(&rows[i], total_mem, t, &style));
+            .render(cx, |i, _| self.proc_row(&rows[i], total_mem, t, &style));
         div().id("table").focusable().flex_1().flex_col().min_h(0.0).child(table)
     }
 

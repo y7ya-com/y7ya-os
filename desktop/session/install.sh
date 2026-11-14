@@ -12,6 +12,12 @@ install -Dm755 desktop/session/y7ya-os-session "$HOME/.local/bin/y7ya-os-session
 for f in apps/*/*.desktop; do
     install -Dm644 "$f" "$HOME/.local/share/applications/$(basename "$f")"
 done
+# App icons (y7ya-*): render assets/icons into a hicolor tree and install it.
+rm -rf target/icons
+target/release/render-icons target/icons
+mkdir -p "$HOME/.local/share/icons"
+cp -r target/icons/hicolor "$HOME/.local/share/icons/"
+gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 if [ "$1" = "--user-only" ]; then
     echo "Installed for $USER. Add the login-screen entry with: desktop/session/install.sh"
     exit 0

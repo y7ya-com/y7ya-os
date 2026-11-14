@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Notes
+Comment=A lightweight Apple Notes–style notes app
+Exec=notes
+Icon=knotes
+Terminal=false
+Categories=Utility;
+StartupWMClass=notes

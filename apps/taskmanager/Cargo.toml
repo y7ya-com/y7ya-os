@@ -1,0 +1,15 @@
+[package]
+name = "taskmanager"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["foreign-toplevel"]
+# Group "Apps" by the compositor's window list (zwlr_foreign_toplevel_manager_v1).
+foreign-toplevel = ["dep:wayland-client", "dep:wayland-protocols-wlr"]
+
+[dependencies]
+libc = "0.2.191"
+ui = { path = "../../crates/ui" }
+wayland-client = { version = "0.31.15", optional = true }
+wayland-protocols-wlr = { version = "0.3.12", features = ["client"], optional = true }

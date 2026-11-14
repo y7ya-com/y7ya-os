@@ -87,6 +87,7 @@ struct GlyphEntry {
 pub struct GlyphAtlas {
     swash: SwashCache,
     entries: HashMap<CacheKey, Option<GlyphEntry>>,
+    images: HashMap<u64, Option<[f32; 4]>>,
     shelf_x: u32,
     shelf_y: u32,
     shelf_h: u32,
@@ -99,6 +100,7 @@ impl GlyphAtlas {
         Self {
             swash: SwashCache::new(),
             entries: HashMap::new(),
+            images: HashMap::new(),
             shelf_x: 0,
             shelf_y: 0,
             shelf_h: 0,
@@ -109,6 +111,7 @@ impl GlyphAtlas {
 
     pub fn reset(&mut self) {
         self.entries.clear();
+        self.images.clear();
         self.shelf_x = 0;
         self.shelf_y = 0;
         self.shelf_h = 0;
@@ -157,6 +160,20 @@ impl GlyphAtlas {
             ),
         };
 
+        Some(GlyphEntry {
+            uv: self.alloc(w, h, rgba)?,
+            left: image.placement.left,
+            top: image.placement.top,
+            w,
+            h,
+            color,
+        })
+    }
+}
+
+impl GlyphAtlas {
+    /// Packs `w`×`h` premultiplied RGBA pixels and returns their UV rect.
+    fn alloc(&mut self, w: u32, h: u32, rgba: Vec<u8>) -> Option<[f32; 4]> {
         // One pixel of padding keeps linear sampling from bleeding neighbors in.
         if self.shelf_x + w + 1 > ATLAS_SIZE {
             self.shelf_x = 0;
@@ -171,16 +188,28 @@ impl GlyphAtlas {
         self.shelf_x += w + 1;
         self.shelf_h = self.shelf_h.max(h);
         self.uploads.push(AtlasUpload { x, y, w, h, rgba });
-
         let s = ATLAS_SIZE as f32;
-        Some(GlyphEntry {
-            uv: [x as f32 / s, y as f32 / s, (x + w) as f32 / s, (y + h) as f32 / s],
-            left: image.placement.left,
-            top: image.placement.top,
-            w,
-            h,
-            color,
-        })
+        Some([x as f32 / s, y as f32 / s, (x + w) as f32 / s, (y + h) as f32 / s])
+    }
+
+    /// Packs a straight-alpha RGBA image (at most 512×512) once per `key` and
+    /// returns its UV rect, for drawing with [`Scene::glyph`] as a color glyph.
+    /// Images are dropped with everything else when the atlas resets.
+    pub fn image(&mut self, key: u64, w: u32, h: u32, rgba: &[u8]) -> Option<[f32; 4]> {
+        if let Some(uv) = self.images.get(&key) {
+            return *uv;
+        }
+        let ok = w > 0 && h > 0 && w <= 512 && h <= 512 && rgba.len() == (w * h * 4) as usize;
+        let premultiplied = rgba
+            .chunks_exact(4)
+            .flat_map(|p| {
+                let a = p[3] as u32;
+                [(p[0] as u32 * a / 255) as u8, (p[1] as u32 * a / 255) as u8, (p[2] as u32 * a / 255) as u8, p[3]]
+            })
+            .collect();
+        let uv = if ok { self.alloc(w, h, premultiplied) } else { None };
+        self.images.insert(key, uv);
+        uv
     }
 }
 

@@ -1,0 +1,13 @@
+[package]
+name = "clipboard"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = { workspace = true }
+dirs = { workspace = true }
+libc = "0.2.191"
+png = { workspace = true }
+ui = { path = "../../crates/ui" }
+# Already used by `ui` (through arboard); its `watch` module drives the daemon.
+wl-clipboard-rs = "0.9.5"

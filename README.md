@@ -1,6 +1,52 @@
+# y7ya-os
+
+My own Mac-inspired desktop for Linux, and the apps that live in it. Faithful to
+macOS where it matters (windows, Mission Control, the little details), without the
+parts I don't want (no Dock), and light on battery: everything renders only when
+something changes.
+
+| Path | What |
+|---|---|
+| `desktop/` | **The desktop**: a Wayland compositor in Rust (Smithay) with Mac-style windows |
+| `apps/notes/` | **Notes** for the desktop, on our own GPU UI framework |
+| `android/` | **Notes for Android** (Kotlin + Compose), synced peer to peer |
+| `crates/ui/` | The tiny GPUI-style UI framework every app is built on |
+| `crates/notes-core/` | Notebook (Automerge) + device-to-device sync (iroh) |
+| `crates/notes-ffi/` | The core, exposed to Kotlin via UniFFI |
+
+**Roadmap:** Mission Control + spaces on a 3-finger swipe · app switcher · Spotlight ·
+notifications + Control Center · lock screen · Files · Calculator · Preview / Quick Look ·
+TextEdit · Screenshot · Clipboard history · Windows-style Task Manager · Calendar +
+Reminders (peer-to-peer synced) · FileDrop to Android · an AI helper (Claude or Codex)
+instead of a Settings app.
+
+## Desktop
+
+```sh
+cargo run --release -p y7-desktop -- -c konsole   # nested, in a window on your current desktop
+```
+
+Windows get a macOS-style title bar drawn by the compositor (traffic lights that show
+their glyphs on hover, centered title, active/inactive states), large rounded corners
+and soft two-layer shadows; new windows fade and zoom in. Drag the title bar to move,
+double-click it to zoom, drag any edge to resize.
+
+| Shortcut | Action |
+|---|---|
+| Super+Q / Super+W | Close window |
+| Super+M / Super+Shift+M | Minimize / bring back the last minimized window |
+| Super+F | Zoom (fill the screen) |
+| Super+Tab | Next window |
+| Super+Return / Super+E | Terminal / file manager |
+| Ctrl+Alt+Backspace | Quit the desktop |
+
+`y7-desktop --headless 1440x900` renders offscreen and takes scripted input on stdin
+(`spawn`, `move`, `click`, `key super+m`, `shot file.png`, ...), which is how the
+desktop is tested without touching a real screen.
+
 # Notes
 
-A lightweight, Apple Notes–style notes app for Linux, written in Rust on a tiny
+A lightweight, Apple Notes–style notes app, written in Rust on a tiny
 GPUI-inspired UI framework built from scratch for it, plus an iPhone Notes–style
 Android app. The two sync directly with each other: no account, no server.
 
@@ -18,9 +64,9 @@ Android app. The two sync directly with each other: no account, no server.
 ## Build and install
 
 ```sh
-cargo build --release
+cargo build --release -p notes
 install -Dm755 target/release/notes ~/.local/bin/notes
-install -Dm644 notes.desktop ~/.local/share/applications/notes.desktop
+install -Dm644 apps/notes/notes.desktop ~/.local/share/applications/notes.desktop
 ```
 
 Needs a GPU with Vulkan (falls back to OpenGL ES). Tested on KDE Plasma (Wayland).
@@ -77,7 +123,7 @@ for testing.
 
 ## How it's built
 
-`src/ui` is a ~3,000-line immediate-mode UI framework in the spirit of
+`crates/ui` is a ~3,000-line immediate-mode UI framework in the spirit of
 [GPUI](https://www.gpui.rs): the element tree is rebuilt every frame, laid out with
 [taffy](https://github.com/DioxusLabs/taffy) flexbox, and drawn on the GPU by
 [wgpu](https://wgpu.rs) with a single instanced pipeline (SDF rounded rects,
@@ -85,7 +131,7 @@ shadows, line icons and glyphs from an atlas). Text shaping and editing use
 [cosmic-text](https://github.com/pop-os/cosmic-text); windowing uses
 [winit](https://github.com/rust-windowing/winit).
 
-`src/notes` is the desktop app itself: the views, theme and icons, on top of the
+`apps/notes` is the desktop app itself: the views, theme and icons, on top of the
 shared notebook in `crates/notes-core`.
 
 `notes --snapshot out.png [--light]` renders the UI with sample data offscreen.

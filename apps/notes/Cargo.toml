@@ -1,0 +1,11 @@
+[package]
+name = "notes"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = { workspace = true }
+dirs = { workspace = true }
+notes-core = { path = "../../crates/notes-core" }
+qrcode = { workspace = true }
+ui = { path = "../../crates/ui" }

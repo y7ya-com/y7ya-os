@@ -1,0 +1,16 @@
+[package]
+name = "ui"
+version = "0.1.0"
+edition = "2024"
+description = "A minimal GPU UI framework in the spirit of GPUI, shared by y7ya-os apps"
+
+[dependencies]
+arboard = { workspace = true }
+bytemuck = { workspace = true }
+cosmic-text = { workspace = true }
+dirs = { workspace = true }
+png = { workspace = true }
+pollster = { workspace = true }
+taffy = { workspace = true }
+wgpu = { workspace = true }
+winit = { workspace = true }

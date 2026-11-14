@@ -1,4 +1,4 @@
-use crate::ui::{Color, rgb, rgba};
+use ui::{Color, rgb, rgba};
 
 /// Colors sampled to match macOS Notes in light and dark appearance.
 #[derive(Clone, Copy)]

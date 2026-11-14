@@ -3,7 +3,7 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::ui::{Bounds, Color, Scene, Waker};
+use ui::{Bounds, Color, Scene, Waker};
 
 /// Records what changed and wakes the UI, which picks it up in `on_external`.
 #[derive(Default)]

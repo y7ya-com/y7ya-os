@@ -13,10 +13,10 @@ pub const ATLAS_SIZE: u32 = 2048;
 pub const FONT_FAMILY: &str = "Inter";
 
 const FONTS: [&[u8]; 4] = [
-    include_bytes!("../../assets/fonts/Inter-Regular.ttf"),
-    include_bytes!("../../assets/fonts/Inter-Medium.ttf"),
-    include_bytes!("../../assets/fonts/Inter-SemiBold.ttf"),
-    include_bytes!("../../assets/fonts/Inter-Bold.ttf"),
+    include_bytes!("../assets/fonts/Inter-Regular.ttf"),
+    include_bytes!("../assets/fonts/Inter-Medium.ttf"),
+    include_bytes!("../assets/fonts/Inter-SemiBold.ttf"),
+    include_bytes!("../assets/fonts/Inter-Bold.ttf"),
 ];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

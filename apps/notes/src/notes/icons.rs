@@ -1,7 +1,7 @@
 //! SF Symbols–style line icons drawn with rounded strokes. Each draws into a
 //! square box centered in the given bounds.
 
-use crate::ui::{Bounds, Color, Scene, pt};
+use ui::{Bounds, Color, Scene, pt};
 
 const STROKE: f32 = 1.5;
 

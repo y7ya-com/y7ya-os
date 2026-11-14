@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::ui::*;
+use ui::*;
 use model::{DEFAULT_FOLDER, Folder, Note, Store, full_date, list_date, now, section};
 use notes_core::Status;
 use sync::SyncEvents;
@@ -1335,7 +1335,7 @@ mod tests {
     fn new_note_typing_and_menu() {
         let path = std::env::temp_dir().join("notes-selftest.png");
         let path = std::env::var_os("NOTES_TEST_PNG").map(std::path::PathBuf::from).unwrap_or(path);
-        crate::ui::snapshot((1180.0, 740.0), 2.0, false, &path, |cx| NotesApp::new(demo_store(), None, cx), |app, cx| {
+        ui::snapshot((1180.0, 740.0), 2.0, false, &path, |cx| NotesApp::new(demo_store(), None, cx), |app, cx| {
             let before = app.store.count_in(DEFAULT_FOLDER);
             app.new_note(cx);
             assert!(cx.is_focused("editor"));

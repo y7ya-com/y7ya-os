@@ -1,0 +1,15 @@
+[package]
+name = "y7-desktop"
+version = "0.1.0"
+edition = "2024"
+description = "The y7ya-os desktop: a Wayland compositor with Mac-style windows"
+
+[dependencies]
+anyhow = "1.0.104"
+bitflags = "2.13.2"
+dirs.workspace = true
+smithay = { version = "0.7", default-features = false, features = ["backend_winit", "backend_egl", "renderer_gl", "wayland_frontend", "desktop"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+cosmic-text = { workspace = true }
+png = { workspace = true }

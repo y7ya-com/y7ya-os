@@ -1,0 +1,430 @@
+use std::cell::RefCell;
+use std::ffi::OsString;
+use std::sync::Arc;
+use std::time::Instant;
+
+use smithay::desktop::{PopupManager, Space, Window, WindowSurfaceType};
+use smithay::input::{Seat, SeatState};
+use smithay::output::Output;
+use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::{Interest, LoopHandle, LoopSignal, Mode, PostAction};
+use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecoMode;
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::{Display, DisplayHandle};
+use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Size};
+use smithay::wayland::compositor::{CompositorClientState, CompositorState, get_parent};
+use smithay::wayland::output::OutputManagerState;
+use smithay::wayland::selection::data_device::DataDeviceState;
+use smithay::wayland::selection::primary_selection::PrimarySelectionState;
+use smithay::wayland::shell::xdg::XdgShellState;
+use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
+use smithay::wayland::shm::ShmState;
+use smithay::wayland::socket::ListeningSocketSource;
+use smithay::wayland::viewporter::ViewporterState;
+
+use crate::grabs::Edges;
+
+/// Height of the title bar drawn above windows that let us decorate them.
+pub const TITLEBAR_H: i32 = 32;
+/// Window corner radius (macOS 26 uses generous radii).
+pub const RADIUS: f32 = 14.0;
+/// How far outside a window's edge the resize handles reach.
+const RESIZE_BAND: i32 = 6;
+/// Traffic lights: first center from the left edge, spacing between centers, radius.
+pub const LIGHT_X: f64 = 18.0;
+pub const LIGHT_GAP: f64 = 20.0;
+pub const LIGHT_R: f64 = 6.5;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Button {
+    Close,
+    Minimize,
+    Zoom,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hit {
+    Button(Button),
+    Title,
+    Resize(Edges),
+}
+
+/// Per-window bookkeeping, kept in the window's user data.
+#[derive(Default)]
+pub struct WinData {
+    pub opened: Option<Instant>,
+    /// Where the window was before zooming, to restore it.
+    pub restore: Option<Rectangle<i32, Logical>>,
+    /// Where a minimized window was.
+    pub parked_at: Option<Point<i32, Logical>>,
+}
+
+pub struct Desk {
+    pub start: Instant,
+    pub display_handle: DisplayHandle,
+    pub loop_handle: LoopHandle<'static, Desk>,
+    pub loop_signal: LoopSignal,
+    pub socket_name: OsString,
+
+    pub space: Space<Window>,
+    pub popups: PopupManager,
+    pub minimized: Vec<Window>,
+    /// New windows wait here until their first frame arrives.
+    pub unmapped: Vec<Window>,
+
+    pub compositor_state: CompositorState,
+    pub xdg_shell_state: XdgShellState,
+    pub xdg_decoration_state: XdgDecorationState,
+    pub shm_state: ShmState,
+    pub output_manager_state: OutputManagerState,
+    pub seat_state: SeatState<Desk>,
+    pub data_device_state: DataDeviceState,
+    pub primary_selection_state: PrimarySelectionState,
+    pub viewporter_state: ViewporterState,
+    pub seat: Seat<Desk>,
+
+    pub output: Option<Output>,
+    pub dark: bool,
+    /// The traffic lights under the pointer (they show their glyphs), and the
+    /// one being pressed.
+    pub hovered_lights: Option<Window>,
+    pub pressed: Option<(Window, Button)>,
+    pub last_title_click: Option<(Window, Instant)>,
+    pub needs_redraw: bool,
+}
+
+impl Desk {
+    pub fn new(display: Display<Desk>, loop_handle: LoopHandle<'static, Desk>, loop_signal: LoopSignal) -> Self {
+        let dh = display.handle();
+        let compositor_state = CompositorState::new::<Self>(&dh);
+        let xdg_shell_state = XdgShellState::new::<Self>(&dh);
+        let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
+        let shm_state = ShmState::new::<Self>(&dh, vec![]);
+        let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
+        let data_device_state = DataDeviceState::new::<Self>(&dh);
+        let primary_selection_state = PrimarySelectionState::new::<Self>(&dh);
+        let viewporter_state = ViewporterState::new::<Self>(&dh);
+        let mut seat_state = SeatState::new();
+        let mut seat = seat_state.new_wl_seat(&dh, "seat0");
+        seat.add_keyboard(Default::default(), 300, 30).expect("keyboard");
+        seat.add_pointer();
+
+        let socket = ListeningSocketSource::new_auto().expect("wayland socket");
+        let socket_name = socket.socket_name().to_os_string();
+        loop_handle
+            .insert_source(socket, |stream, _, desk: &mut Desk| {
+                if let Err(e) = desk.display_handle.insert_client(stream, Arc::new(ClientState::default())) {
+                    tracing::warn!("client failed to connect: {e}");
+                }
+            })
+            .expect("socket source");
+        loop_handle
+            .insert_source(Generic::new(display, Interest::READ, Mode::Level), |_, display, desk: &mut Desk| {
+                // Safety: the display is never dropped while the loop runs.
+                unsafe {
+                    display.get_mut().dispatch_clients(desk).unwrap();
+                }
+                Ok(PostAction::Continue)
+            })
+            .expect("display source");
+
+        Desk {
+            start: Instant::now(),
+            display_handle: dh,
+            loop_handle,
+            loop_signal,
+            socket_name,
+            space: Space::default(),
+            popups: PopupManager::default(),
+            minimized: Vec::new(),
+            unmapped: Vec::new(),
+            compositor_state,
+            xdg_shell_state,
+            xdg_decoration_state,
+            shm_state,
+            output_manager_state,
+            seat_state,
+            data_device_state,
+            primary_selection_state,
+            viewporter_state,
+            seat,
+            output: None,
+            dark: detect_dark(),
+            hovered_lights: None,
+            pressed: None,
+            last_title_click: None,
+            needs_redraw: true,
+        }
+    }
+
+    pub fn redraw(&mut self) {
+        self.needs_redraw = true;
+    }
+
+    pub fn output_geometry(&self) -> Rectangle<i32, Logical> {
+        self.output
+            .as_ref()
+            .and_then(|o| self.space.output_geometry(o))
+            .unwrap_or_else(|| Rectangle::from_size((1280, 800).into()))
+    }
+
+    /// The window whose toplevel owns `surface` (directly or via subsurfaces).
+    pub fn window_for_surface(&self, surface: &WlSurface) -> Option<Window> {
+        let mut root = surface.clone();
+        while let Some(parent) = get_parent(&root) {
+            root = parent;
+        }
+        self.space
+            .elements()
+            .chain(self.minimized.iter())
+            .chain(self.unmapped.iter())
+            .find(|w| w.toplevel().is_some_and(|t| t.wl_surface() == &root))
+            .cloned()
+    }
+
+    pub fn surface_under(&self, pos: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>)> {
+        self.space.element_under(pos).and_then(|(window, loc)| {
+            window
+                .surface_under(pos - loc.to_f64(), WindowSurfaceType::ALL)
+                .map(|(s, p)| (s, (p + loc).to_f64()))
+        })
+    }
+
+    pub fn focused_window(&self) -> Option<Window> {
+        let surface = self.seat.get_keyboard()?.current_focus()?;
+        self.window_for_surface(&surface)
+    }
+
+    /// Smallest y for a window's content, so its title bar stays on screen.
+    pub fn min_content_y(&self, window: &Window) -> i32 {
+        self.output_geometry().loc.y + if is_ssd(window) { TITLEBAR_H } else { 0 }
+    }
+
+    /// The window's visible frame: its content plus our title bar.
+    pub fn frame(&self, window: &Window) -> Option<Rectangle<i32, Logical>> {
+        let loc = self.space.element_location(window)?;
+        Some(frame_of(window, loc))
+    }
+
+    /// What the pointer would hit in our window chrome at `pos`, if anything.
+    pub fn deco_hit(&self, pos: Point<f64, Logical>) -> Option<(Window, Hit)> {
+        for window in self.space.elements().rev() {
+            let Some(frame) = self.frame(window) else { continue };
+            if !is_ssd(window) {
+                // Client-drawn windows handle their own edges; just stop at them.
+                if self.space.element_bbox(window).is_some_and(|b| b.to_f64().contains(pos)) {
+                    return None;
+                }
+                continue;
+            }
+            let band = Rectangle::new(
+                frame.loc - Point::from((RESIZE_BAND, RESIZE_BAND)),
+                frame.size + Size::from((2 * RESIZE_BAND, 2 * RESIZE_BAND)),
+            );
+            if !band.to_f64().contains(pos) {
+                continue;
+            }
+            let f = frame.to_f64();
+            let inside = f.contains(pos);
+            // Corners get a slightly larger grab area, like macOS.
+            let corner = 12.0;
+            let mut edges = Edges::empty();
+            if pos.x < f.loc.x || (!inside || pos.y > f.loc.y + f.size.h - 3.0) && pos.x < f.loc.x + corner {
+                edges |= Edges::LEFT;
+            }
+            if pos.x >= f.loc.x + f.size.w || (!inside || pos.y > f.loc.y + f.size.h - 3.0) && pos.x > f.loc.x + f.size.w - corner {
+                edges |= Edges::RIGHT;
+            }
+            if pos.y < f.loc.y {
+                edges |= Edges::TOP;
+            }
+            if pos.y >= f.loc.y + f.size.h || (pos.y > f.loc.y + f.size.h - 3.0) {
+                edges |= Edges::BOTTOM;
+            }
+            if !inside || edges.contains(Edges::BOTTOM) {
+                if edges.is_empty() {
+                    continue;
+                }
+                return Some((window.clone(), Hit::Resize(edges)));
+            }
+            if pos.y < f.loc.y + TITLEBAR_H as f64 {
+                let local = pos - f.loc;
+                for (i, button) in [Button::Close, Button::Minimize, Button::Zoom].into_iter().enumerate() {
+                    let c = Point::<f64, Logical>::from((LIGHT_X + i as f64 * LIGHT_GAP, TITLEBAR_H as f64 / 2.0));
+                    let d = local - c;
+                    if (d.x * d.x + d.y * d.y).sqrt() <= LIGHT_R + 2.0 {
+                        return Some((window.clone(), Hit::Button(button)));
+                    }
+                }
+                return Some((window.clone(), Hit::Title));
+            }
+            return None;
+        }
+        None
+    }
+
+    /// Whether the pointer is over a window's traffic-light group.
+    pub fn lights_hovered(&self, pos: Point<f64, Logical>) -> Option<Window> {
+        let window = self.space.element_under(pos).map(|(w, _)| w.clone()).or_else(|| {
+            self.space.elements().rev().find(|w| self.frame(w).is_some_and(|f| f.to_f64().contains(pos))).cloned()
+        })?;
+        if !is_ssd(&window) {
+            return None;
+        }
+        let f = self.frame(&window)?.to_f64();
+        let local = pos - f.loc;
+        let group = Rectangle::<f64, Logical>::new(
+            (LIGHT_X - LIGHT_R - 4.0, 0.0).into(),
+            (2.0 * LIGHT_GAP + 2.0 * LIGHT_R + 8.0, TITLEBAR_H as f64).into(),
+        );
+        group.contains(local).then_some(window)
+    }
+
+    pub fn focus(&mut self, window: Option<Window>) {
+        let serial = SERIAL_COUNTER.next_serial();
+        if let Some(w) = &window {
+            self.space.raise_element(w, true);
+        }
+        for w in self.space.elements() {
+            let active = window.as_ref() == Some(w);
+            if w.set_activated(active) {
+                if let Some(t) = w.toplevel() {
+                    t.send_pending_configure();
+                }
+            }
+        }
+        let surface = window.and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()));
+        let keyboard = self.seat.get_keyboard().unwrap();
+        keyboard.set_focus(self, surface, serial);
+        self.redraw();
+    }
+
+    /// Focus the top-most visible window, if any.
+    pub fn focus_top(&mut self) {
+        let top = self.space.elements().last().cloned();
+        self.focus(top);
+    }
+
+    pub fn close(&mut self, window: &Window) {
+        if let Some(t) = window.toplevel() {
+            t.send_close();
+        }
+    }
+
+    pub fn minimize(&mut self, window: &Window) {
+        win_data(window).borrow_mut().parked_at = self.space.element_location(window);
+        self.space.unmap_elem(window);
+        self.minimized.push(window.clone());
+        self.focus_top();
+    }
+
+    /// Brings back the most recently minimized window.
+    pub fn unminimize_last(&mut self) {
+        if let Some(window) = self.minimized.pop() {
+            let loc = win_data(&window).borrow_mut().parked_at.take();
+            self.place(&window, loc);
+            self.focus(Some(window));
+        }
+    }
+
+    /// Fills the screen with the window, or puts it back where it was.
+    pub fn zoom(&mut self, window: &Window) {
+        let Some(toplevel) = window.toplevel() else { return };
+        let data = win_data(window);
+        let restore = data.borrow_mut().restore.take();
+        match restore {
+            Some(rect) => {
+                toplevel.with_pending_state(|s| {
+                    s.states.unset(xdg_toplevel::State::Maximized);
+                    s.size = Some(rect.size);
+                });
+                self.space.map_element(window.clone(), rect.loc, true);
+            }
+            None => {
+                let Some(loc) = self.space.element_location(window) else { return };
+                data.borrow_mut().restore = Some(Rectangle::new(loc, window.geometry().size));
+                let out = self.output_geometry();
+                let top = if is_ssd(window) { TITLEBAR_H } else { 0 };
+                toplevel.with_pending_state(|s| {
+                    s.states.set(xdg_toplevel::State::Maximized);
+                    s.size = Some((out.size.w, out.size.h - top).into());
+                });
+                self.space.map_element(window.clone(), (out.loc.x, out.loc.y + top), true);
+            }
+        }
+        toplevel.send_pending_configure();
+        self.redraw();
+    }
+
+    /// Maps a window, cascading new ones from the top-left like macOS.
+    pub fn place(&mut self, window: &Window, at: Option<Point<i32, Logical>>) {
+        let out = self.output_geometry();
+        let loc = at.unwrap_or_else(|| {
+            let size = window.geometry().size;
+            let n = self.space.elements().count() as i32;
+            let x = out.loc.x + (out.size.w - size.w) / 2 + (n % 6) * 26 - 65;
+            let y = out.loc.y + ((out.size.h - size.h) / 3).max(TITLEBAR_H + 8) + (n % 6) * 26 - 40;
+            (x.max(out.loc.x), y.max(out.loc.y + TITLEBAR_H)).into()
+        });
+        self.space.map_element(window.clone(), loc, true);
+    }
+
+    /// Runs `cmd` as a client of this desktop.
+    pub fn spawn(&self, cmd: &str) {
+        let mut parts = cmd.split_whitespace();
+        let Some(program) = parts.next() else { return };
+        let result = std::process::Command::new(program)
+            .args(parts)
+            .env("WAYLAND_DISPLAY", &self.socket_name)
+            .env_remove("DISPLAY")
+            .env("XDG_SESSION_TYPE", "wayland")
+            .env("QT_QPA_PLATFORM", "wayland")
+            .env("GDK_BACKEND", "wayland")
+            .env("MOZ_ENABLE_WAYLAND", "1")
+            .env("ELECTRON_OZONE_PLATFORM_HINT", "wayland")
+            .spawn();
+        if let Err(e) = result {
+            tracing::warn!("couldn't start {cmd}: {e}");
+        }
+    }
+}
+
+pub fn win_data(window: &Window) -> &RefCell<WinData> {
+    window.user_data().insert_if_missing(|| RefCell::new(WinData::default()));
+    window.user_data().get::<RefCell<WinData>>().unwrap()
+}
+
+/// Whether we draw this window's title bar (it asked for server-side decorations).
+pub fn is_ssd(window: &Window) -> bool {
+    window.toplevel().is_some_and(|t| {
+        t.current_state().decoration_mode == Some(DecoMode::ServerSide)
+    })
+}
+
+pub fn frame_of(window: &Window, loc: Point<i32, Logical>) -> Rectangle<i32, Logical> {
+    let size = window.geometry().size;
+    if is_ssd(window) {
+        Rectangle::new((loc.x, loc.y - TITLEBAR_H).into(), (size.w, size.h + TITLEBAR_H).into())
+    } else {
+        Rectangle::new(loc, size)
+    }
+}
+
+/// KDE's color scheme says whether the user prefers dark.
+fn detect_dark() -> bool {
+    let path = dirs::config_dir().map(|d| d.join("kdeglobals"));
+    let Some(s) = path.and_then(|p| std::fs::read_to_string(p).ok()) else { return true };
+    s.lines().find_map(|l| l.strip_prefix("ColorScheme=")).is_some_and(|v| v.to_lowercase().contains("dark"))
+}
+
+#[derive(Default)]
+pub struct ClientState {
+    pub compositor_state: CompositorClientState,
+}
+
+impl ClientData for ClientState {
+    fn initialized(&self, _client_id: ClientId) {}
+    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
+}

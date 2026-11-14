@@ -1,5 +1,5 @@
 mod notes;
-mod ui;
+
 
 use std::sync::Arc;
 

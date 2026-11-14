@@ -7,7 +7,7 @@ use history::{Content, Store, now_ms};
 use picker::Picker;
 use ui::WindowOptions;
 
-const USAGE: &str = "usage: clipboard [--pick | --daemon | --snapshot <png> [--light] [--select <n>]]";
+const USAGE: &str = "usage: clipboard [--pick | --daemon | --snapshot <png> [--light] [--select <n>] [--search <text>]]";
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -27,12 +27,19 @@ fn main() {
         }
         return;
     }
-    // `clipboard --snapshot out.png [--light]` renders the picker over sample history.
+    // `clipboard --snapshot out.png [--light] [--select <n>] [--search <text>]` renders
+    // the picker over sample history.
     if let Some(path) = arg("--snapshot") {
         let dark = !args.iter().any(|a| a == "--light");
         let store = demo_store();
         let select = arg("--select").and_then(|n| n.parse().ok()).unwrap_or(0);
-        ui::snapshot(picker::SIZE, 2.0, dark, path.as_ref(), |cx| Picker::new(store, true, cx), |app, _| app.select_nth(select));
+        let search = arg("--search");
+        ui::snapshot(picker::SIZE, 2.0, dark, path.as_ref(), |cx| Picker::new(store, true, cx), |app, cx| {
+            if let Some(q) = &search {
+                app.search_for(q, cx);
+            }
+            app.select_nth(select);
+        });
         return;
     }
     if args.len() > 1 && !args.iter().any(|a| a == "--pick") {

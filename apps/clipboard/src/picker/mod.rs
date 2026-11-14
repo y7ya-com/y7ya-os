@@ -20,6 +20,8 @@ use crate::history::{Entry, Kind, Store, now_ms};
 pub const SIZE: (f32, f32) = (780.0, 480.0);
 const LIST_W: f32 = 330.0;
 const ROW_H: f32 = 50.0;
+const SEARCH_SIZE: f32 = 20.0;
+const PLACEHOLDER: &str = "Search Clipboard";
 /// Characters of text shown in the preview pane.
 const PREVIEW_CHARS: usize = 20_000;
 
@@ -97,8 +99,8 @@ impl Picker {
     pub fn new(store: Store, preview: bool, cx: &mut Cx) -> Self {
         let entries = store.load();
         let texts = entries.iter().filter(|e| e.kind == Kind::Text).filter_map(|e| Some((e.id.clone(), store.read_text(e)?))).collect();
-        let mut search = TextInput::new(&mut cx.text.fonts, TextStyle::default(), true);
-        search.placeholder = "Search clipboard history".into();
+        // The placeholder is drawn by `search_bar`, clear of the caret.
+        let search = TextInput::new(&mut cx.text.fonts, TextStyle::default(), true);
         cx.window_radius = 12.0;
         cx.focus("search");
         let selected = entries.first().map(|e| e.id.clone());
@@ -146,6 +148,15 @@ impl Picker {
         self.selected = None;
         self.ensure_selection();
         self.move_selection(n as i32);
+    }
+
+    /// Types `q` into the search field (for previews and tests).
+    pub fn search_for(&mut self, q: &str, cx: &mut Cx) {
+        let mut s = self.search.borrow_mut();
+        s.set_text(&mut cx.text.fonts, q);
+        s.move_to_end();
+        drop(s);
+        self.on_input(eid("search"), cx);
     }
 
     fn move_selection(&mut self, delta: i32) {
@@ -200,7 +211,7 @@ impl Picker {
 
     fn sync_input_style(&self, t: &Theme) {
         let mut s = self.search.borrow_mut();
-        s.set_styles(TextStyle { size: 20.0, line_height: 1.25, weight: Weight::Regular, color: t.text }, None);
+        s.set_styles(TextStyle { size: SEARCH_SIZE, line_height: 1.25, weight: Weight::Regular, color: t.text }, None);
         s.placeholder_color = t.text_tertiary;
         s.caret_color = t.accent;
         s.selection_color = t.text_selection;
@@ -223,13 +234,32 @@ impl Picker {
             .border_b(t.divider)
             .window_drag()
             .child(canvas(move |s, b| icons::magnifier(s, b, c)).size(22.0).shrink_0())
-            .child(div().id("search-box").flex_1().cursor(CursorIcon::Text).child(input("search", &self.search).w_full()))
-            .child(text(count).size(12.0).color(t.text_secondary).shrink_0())
+            .child(
+                div()
+                    .id("search-box")
+                    .flex_1()
+                    .min_w_0()
+                    .cursor(CursorIcon::Text)
+                    .child(input("search", &self.search).w_full())
+                    // Starts just past the caret, as in Spotlight, rather than under it.
+                    .child_if(self.query.is_empty(), || {
+                        text(PLACEHOLDER)
+                            .size(SEARCH_SIZE)
+                            .line_height(1.25)
+                            .color(t.text_tertiary)
+                            .absolute(3.0, 0.0)
+                            .into()
+                    }),
+            )
+            .child(text(count).size(12.0).tabular().color(t.text_secondary).shrink_0())
     }
 
-    fn row(&mut self, e: &Entry, selected: bool, t: &Theme) -> Row<Self> {
-        let ink = if selected { Color::WHITE } else { t.text };
-        let secondary = if selected { rgba(0xffffff, 0.75) } else { t.text_secondary };
+    /// One entry. `selected` rows are accent-colored while the window is
+    /// active (`emphasized`) and gray otherwise.
+    fn row(&mut self, e: &Entry, selected: bool, emphasized: bool, t: &Theme) -> Row<Self> {
+        let lit = selected && emphasized;
+        let ink = if lit { Color::WHITE } else { t.text };
+        let secondary = if lit { rgba(0xffffff, 0.75) } else { t.text_secondary };
         let id = e.id.clone();
 
         let mut thumb = div().size(34.0).shrink_0().rounded(7.0).items_center().justify_center().clip();
@@ -237,7 +267,7 @@ impl Picker {
             Kind::Text => {
                 let text = self.texts.get(&e.id).map(String::as_str).unwrap_or("");
                 let c = secondary;
-                thumb = thumb.bg(if selected { rgba(0xffffff, 0.18) } else { t.field }).child(canvas(move |s, b| icons::document(s, b, c)).size(20.0));
+                thumb = thumb.bg(if lit { rgba(0xffffff, 0.18) } else { t.field }).child(canvas(move |s, b| icons::document(s, b, c)).size(20.0));
                 let chars = text.chars().count();
                 (one_line(text), format!("{} · {} characters", ago(e.time), group_digits(chars)))
             }
@@ -245,7 +275,7 @@ impl Picker {
                 if let Some(p) = self.pictures(e) {
                     let (w, h) = fit(p.thumb.width(), p.thumb.height(), 34.0, 34.0);
                     let el = image(&p.thumb, Fit::Contain, 0.0).w(w).h(h);
-                    thumb = thumb.bg(if selected { rgba(0xffffff, 0.18) } else { t.field }).child(el);
+                    thumb = thumb.bg(if lit { rgba(0xffffff, 0.18) } else { t.field }).child(el);
                 }
                 let dims = e.dims.map_or(String::new(), |(w, h)| format!(" {w}×{h}"));
                 (format!("Image{dims}"), format!("{} · {}", ago(e.time), human_size(e.size)))
@@ -265,10 +295,10 @@ impl Picker {
                     .min_w_0()
                     .gap(2.0)
                     .child(text(title).color(ink).truncate())
-                    .child(text(detail).size(11.0).color(secondary).truncate()),
+                    .child(text(detail).size(11.0).tabular().color(secondary).truncate()),
             )
             .child_if(e.pinned, || {
-                let c = if selected { ink } else { t.accent };
+                let c = if lit { ink } else if emphasized { t.accent } else { t.text_secondary };
                 canvas(move |s, b| icons::pin(s, b, c)).size(14.0).shrink_0().into()
             });
         let (a, b) = (id.clone(), id.clone());
@@ -330,18 +360,20 @@ impl Picker {
                     .justify_between()
                     .gap(12.0)
                     .child(text(k).size(12.0).color(t.text_secondary).shrink_0())
-                    .child(text(v).size(12.0).truncate()),
+                    .child(text(v).size(12.0).tabular().truncate()),
             );
         }
         pane.child(body).child(div().h(1.0).shrink_0().bg(t.divider)).child(info)
     }
 
+    /// The action bar: what each key does, as "Copy ↩" pairs.
     fn footer(&self, t: &Theme) -> Div<Self> {
-        let key = |k: &str, label: &str| {
+        let key = |label: &str, k: &str| {
             div()
                 .flex_row()
                 .items_center()
-                .gap(5.0)
+                .gap(6.0)
+                .child(text(label.to_string()).size(11.0).color(t.text_secondary))
                 .child(
                     div()
                         .h(18.0)
@@ -350,23 +382,23 @@ impl Picker {
                         .bg(t.field)
                         .border(t.divider, 0.5)
                         .items_center()
+                        .justify_center()
                         .child(text(k.to_string()).size(11.0).weight(Weight::Medium).color(t.text_secondary)),
                 )
-                .child(text(label.to_string()).size(11.0).color(t.text_secondary))
         };
         let pinned = self.selected.as_ref().and_then(|s| self.entries.iter().find(|e| &e.id == s)).is_some_and(|e| e.pinned);
         div()
-            .h(34.0)
+            .h(36.0)
             .shrink_0()
             .flex_row()
             .items_center()
             .gap(16.0)
             .px(16.0)
-            .child(text("Clipboard").size(11.0).weight(Weight::Semibold).color(t.text_secondary).flex_1())
-            .child(key("↩", "Copy"))
-            .child(key("Ctrl P", if pinned { "Unpin" } else { "Pin" }))
-            .child(key("Del", "Remove"))
-            .child(key("Esc", "Close"))
+            .child(text("Clipboard").size(11.0).weight(Weight::Semibold).color(t.text_secondary).truncate().flex_1())
+            .child(key("Copy", "↩"))
+            .child(key(if pinned { "Unpin" } else { "Pin" }, "Ctrl+P"))
+            .child(key("Remove", "Del"))
+            .child(key("Close", "Esc"))
     }
 }
 
@@ -392,23 +424,18 @@ impl App for Picker {
             text_secondary: t.text_secondary,
             divider: t.divider,
             hover: t.hover,
-            selection: t.accent,
-            selection_text: Color::WHITE,
+            // The list follows the search field's focus: accent while the
+            // window is active, gray when it isn't.
+            selection: native::selection(cx, true),
+            selection_text: native::selection_text(cx, true, t.text),
             zebra: None,
         };
         let columns = [Column::new("")];
         let selected = self.selected.clone();
+        let emphasized = cx.window_focused;
         let list = if entries.is_empty() {
-            let c = t.text_tertiary;
-            let msg = if self.entries.is_empty() { "Nothing copied yet" } else { "No matches" };
-            div()
-                .flex_1()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap(8.0)
-                .child(canvas(move |s, b| icons::clipboard(s, b, c)).size(40.0))
-                .child(text(msg).size(14.0).color(c))
+            let msg = if self.entries.is_empty() { "No Items" } else { "No Results" };
+            div().flex_1().flex_col().items_center().justify_center().child(text(msg).size(15.0).weight(Weight::Medium).color(t.text_tertiary))
         } else {
             // Rows decode thumbnails lazily, which needs `&mut self`.
             let state = std::mem::replace(&mut self.list, TableState::new("unused"));
@@ -417,7 +444,7 @@ impl App for Picker {
                 .render(cx, |i, _cx| {
                     let e = &entries[i];
                     let sel = selected.as_deref() == Some(e.id.as_str());
-                    self.row(e, sel, &t)
+                    self.row(e, sel, emphasized, &t)
                 });
             self.list = state;
             div().flex_1().flex_col().pt(6.0).child(list)
@@ -571,5 +598,27 @@ mod tests {
         assert_eq!(fit(1920, 1080, 380.0, 250.0), (380.0, 214.0));
         assert_eq!(fit(100, 400, 34.0, 34.0), (9.0, 34.0));
         assert_eq!(fit(10, 10, 34.0, 34.0), (10.0, 10.0));
+    }
+
+    #[test]
+    fn search_filters_and_keeps_a_selection() {
+        let dir = std::env::temp_dir().join(format!("clipboard-picker-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::open(&dir);
+        for (i, t) in ["sudo pacman -Syu", "hello@example.com", "cargo test"].iter().enumerate() {
+            store.add(&crate::history::Content::Text(t.to_string()), now_ms() - i as i64 * 1000).unwrap();
+        }
+        let png = dir.join("snapshot.png");
+        ui::snapshot(SIZE, 1.0, false, &png, |cx| Picker::new(store, true, cx), |p, cx| {
+            assert_eq!(p.visible().len(), 3);
+            p.search_for("PACMAN", cx);
+            assert_eq!(p.visible().len(), 1);
+            assert_eq!(p.selected.as_deref(), Some(p.visible()[0].id.as_str()));
+            p.search_for("nothing like this", cx);
+            assert!(p.visible().is_empty() && p.selected.is_none());
+            p.search_for("", cx);
+            assert_eq!(p.visible().len(), 3);
+        });
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Sync
+Comment=Keeps Notes, Calendar and Reminders in sync with your paired devices
+Exec=y7-syncd
+Terminal=false
+NoDisplay=true
+X-KDE-autostart-phase=2

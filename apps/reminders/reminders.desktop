@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Reminders
+Comment=Lists and to-dos that sync with your devices
+Exec=reminders
+Icon=view-task
+Terminal=false
+Categories=Office;ProjectManagement;
+StartupWMClass=reminders

@@ -11,7 +11,14 @@ Cargo workspace. Read `docs/design.md` before building any UI.
   `shot file.png`, `quit`. `Y7_THEME=light|dark` overrides the theme.
 - `crates/ui/` — our GPUI-style UI framework (winit + wgpu + cosmic-text + taffy).
   Every app is built on it. `apps/notes` is the reference app: copy its patterns.
-- `crates/notes-core/` — Automerge notebook + iroh peer-to-peer sync; `crates/notes-ffi/` exposes it to Kotlin.
+- `crates/y7-sync/` — peer-to-peer sync for every app: one device identity and peer
+  list, many Automerge documents multiplexed per connection (iroh). The `y7-syncd`
+  daemon (`crates/y7-syncd/`) runs it on the desktop; apps are `y7_sync::Client`s of
+  it over `$XDG_RUNTIME_DIR/y7-sync.sock`. Android embeds the engine in-process.
+- `crates/sync-ui/` — the shared "Sync with Phone" row and pairing sheet. Never
+  duplicate pairing in an app.
+- `crates/{notes,calendar,reminders}-core/` — each app's document schema on top of
+  y7-sync; `crates/notes-ffi/` exposes Notes to Kotlin.
 - `apps/<name>/` — one crate per app (binary named after the app).
 - `android/` — the Android companion app (Kotlin + Compose), see its `build-rust.sh`.
 
@@ -35,4 +42,6 @@ Cargo isn't on PATH by default: `export PATH=$HOME/.cargo/bin:$PATH`.
   `crates/ui/src/widgets/<name>.rs`) and keep edits to existing files small, since
   several apps grow the framework in parallel.
 - App data lives in `~/.local/share/<app>/`, overridable with `<APP>_DATA_DIR`.
+  Synced documents live in the daemon's `~/.local/share/y7-sync/` instead
+  (`Y7_SYNC_DATA_DIR`, socket `Y7_SYNC_SOCKET`); tests use temp dirs and sockets.
 - Each app ships `apps/<name>/<name>.desktop`.

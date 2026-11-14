@@ -1,0 +1,15 @@
+# Install to ~/.config/systemd/user/ together with y7-syncd.socket, then
+# `systemctl --user enable --now y7-syncd.socket`. The daemon starts when the
+# first app connects. (Without systemd, y7-syncd.desktop autostarts it, and
+# apps start it on demand.)
+[Unit]
+Description=y7ya-os sync daemon (Notes, Calendar, Reminders)
+Requires=y7-syncd.socket
+After=y7-syncd.socket
+
+[Service]
+ExecStart=y7-syncd
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

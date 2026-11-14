@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use notes::NotesApp;
 use notes::model::Store;
-use notes::sync::{SyncEvents, device_name};
+use sync_ui::SyncEvents;
 use ui::WindowOptions;
 
 fn main() {
@@ -19,7 +19,8 @@ fn main() {
         let sync = args.iter().any(|a| a == "--sync");
         if sync {
             let dir = std::env::temp_dir().join(format!("notes-preview-{}", std::process::id()));
-            store.core = Some(Arc::new(notes_core::Core::open(dir, device_name(), Arc::new(SyncEvents::default()))));
+            let engine = y7_sync::Engine::start(dir, y7_sync::device_name(), Arc::new(SyncEvents::default()));
+            store.core = Some(Arc::new(notes_core::Core::with_hub(Arc::new(engine))));
         }
         ui::snapshot((1180.0, 740.0), 2.0, dark, &path, |cx| NotesApp::new(store, None, cx), |app, _| {
             if sync {
@@ -30,8 +31,18 @@ fn main() {
         return;
     }
 
+    // Sync (and the notebook) live in the y7-syncd daemon, shared with the
+    // other apps; this starts it if needed.
     let events = Arc::new(SyncEvents::default());
-    let core = notes_core::Core::open(Store::data_dir(), device_name(), events.clone());
+    let client = match y7_sync::Client::connect_default(events.clone()) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("notes: can't reach the sync service: {e:#}");
+            std::process::exit(1);
+        }
+    };
+    let core = notes_core::Core::with_hub(Arc::new(client));
+    core.import_legacy(&y7_sync::legacy_notes_dir());
     let store = Store::new(Arc::new(core));
     ui::run(
         WindowOptions {

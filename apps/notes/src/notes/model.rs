@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone};
@@ -18,16 +17,12 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn data_dir() -> PathBuf {
-        std::env::var_os("NOTES_DATA_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("notes"))
-    }
-
     pub fn new(core: Arc<Core>) -> Self {
+        let paired = !core.sync().status().peers.is_empty();
         let mut store = Store { core: Some(core), ..Default::default() };
         store.reload();
-        if store.notes.is_empty() && store.folders.len() == 1 && !Self::data_dir().join("peers.json").exists() {
+        // A new device that will sync gets its notes from elsewhere instead.
+        if store.notes.is_empty() && store.folders.len() == 1 && !paired {
             store.notes.push(welcome_note());
             store.save();
         }

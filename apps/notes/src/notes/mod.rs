@@ -7,15 +7,14 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use ui::widgets::{Menu, MenuItem, MenuKey};
 use ui::*;
 use model::{DEFAULT_FOLDER, Folder, Note, Store, full_date, list_date, now, section};
 use notes_core::NOTES_DOC;
 use sync_ui::{Pairing, PairingHost, SyncEvents};
 use theme::Theme;
 
-const SIDEBAR_W: f32 = 220.0;
 const LIST_W: f32 = 300.0;
-const TOOLBAR_H: f32 = 48.0;
 const SAVE_DELAY: Duration = Duration::from_millis(600);
 const PURGE_AFTER_SECS: i64 = 30 * 24 * 3600;
 
@@ -25,7 +24,7 @@ pub enum View {
     Deleted,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 enum MenuAction {
     NewNote,
     NewFolder,
@@ -35,17 +34,6 @@ enum MenuAction {
     Recover(u64),
     RenameFolder(u64),
     DeleteFolder(u64),
-}
-
-struct MenuItem {
-    label: String,
-    /// `None` draws a separator.
-    action: Option<MenuAction>,
-}
-
-struct Menu {
-    pos: Point,
-    items: Vec<MenuItem>,
 }
 
 pub struct NotesApp {
@@ -59,7 +47,7 @@ pub struct NotesApp {
     rename: Rc<RefCell<TextInput>>,
     renaming: Option<u64>,
     sidebar_open: bool,
-    menu: Option<Menu>,
+    menu: Option<Menu<MenuAction>>,
     dirty_since: Option<Instant>,
     events: Option<Arc<SyncEvents>>,
     pairing: Pairing,
@@ -155,6 +143,52 @@ impl NotesApp {
     pub fn open_sync(&mut self) {
         self.menu = None;
         self.pairing.open();
+    }
+
+    // -- previews -----------------------------------------------------------
+
+    /// Shows the folder with this name, or Recently Deleted for "deleted".
+    pub fn show_folder(&mut self, name: &str, cx: &mut Cx) {
+        let view = match self.store.folders.iter().find(|f| f.name.eq_ignore_ascii_case(name)) {
+            Some(f) => View::Folder(f.id),
+            None if name == "deleted" => View::Deleted,
+            None => panic!("no folder named {name}"),
+        };
+        self.set_view(view, cx);
+    }
+
+    pub fn search_for(&mut self, q: &str, cx: &mut Cx) {
+        self.search.borrow_mut().set_text(&mut cx.text.fonts, q);
+        self.on_input(eid("search"), cx);
+        cx.focus("search");
+    }
+
+    /// Opens the selected note's context menu (or its folder's) next to it,
+    /// with the pointer over the second row.
+    pub fn menu_preview(&mut self, folder: bool, cx: &mut Cx) {
+        if folder {
+            cx.mouse = Point { x: 120.0, y: 112.0 };
+            let id = match self.view {
+                View::Folder(f) => f,
+                View::Deleted => DEFAULT_FOLDER,
+            };
+            self.folder_menu(id, cx);
+        } else if let Some(id) = self.selected {
+            cx.mouse = Point { x: native::SIDEBAR_W + 150.0, y: 110.0 };
+            self.note_menu(id, cx);
+        }
+        cx.mouse.y += 6.0 + 24.0 + 12.0;
+        cx.mouse.x += 20.0;
+    }
+
+    pub fn rename_preview(&mut self, cx: &mut Cx) {
+        if let View::Folder(f) = self.view {
+            self.start_rename(f, cx);
+        }
+    }
+
+    pub fn hide_sidebar(&mut self) {
+        self.sidebar_open = false;
     }
 
     // -- queries ------------------------------------------------------------
@@ -387,36 +421,40 @@ impl NotesApp {
         self.select(Some(id), cx);
         cx.focus("list");
         let Some(note) = self.store.note(id) else { return };
-        let item = |label: &str, a: MenuAction| MenuItem { label: label.into(), action: Some(a) };
-        let sep = || MenuItem { label: String::new(), action: None };
         let items = if note.deleted_at.is_some() {
-            vec![item("Recover", MenuAction::Recover(id)), sep(), item("Delete Permanently", MenuAction::DeleteNote(id))]
+            vec![
+                MenuItem::new("Recover", MenuAction::Recover(id)),
+                MenuItem::separator(),
+                MenuItem::new("Delete Permanently", MenuAction::DeleteNote(id)).destructive(),
+            ]
         } else {
             let mut items = vec![
-                item(if note.pinned { "Unpin Note" } else { "Pin Note" }, MenuAction::Pin(id, !note.pinned)),
-                sep(),
+                MenuItem::new(if note.pinned { "Unpin Note" } else { "Pin Note" }, MenuAction::Pin(id, !note.pinned)),
+                MenuItem::separator(),
             ];
             for f in self.store.folders.iter().filter(|f| f.id != note.folder) {
-                items.push(item(&format!("Move to \u{201c}{}\u{201d}", f.name), MenuAction::Move(id, f.id)));
+                items.push(MenuItem::new(format!("Move to \u{201c}{}\u{201d}", f.name), MenuAction::Move(id, f.id)));
             }
             if self.store.folders.len() > 1 {
-                items.push(sep());
+                items.push(MenuItem::separator());
             }
-            items.push(item("Delete", MenuAction::DeleteNote(id)));
+            items.push(MenuItem::new("Delete", MenuAction::DeleteNote(id)).shortcut("Delete"));
             items
         };
-        self.menu = Some(Menu { pos: cx.mouse, items });
+        self.menu = Some(Menu::new(cx.mouse, items));
     }
 
     fn folder_menu(&mut self, id: u64, cx: &mut Cx) {
-        let item = |label: &str, a: MenuAction| MenuItem { label: label.into(), action: Some(a) };
-        let mut items = vec![item("New Note", MenuAction::NewNote), item("New Folder", MenuAction::NewFolder)];
+        let mut items = vec![
+            MenuItem::new("New Note", MenuAction::NewNote).shortcut("Ctrl+N"),
+            MenuItem::new("New Folder", MenuAction::NewFolder).shortcut("Ctrl+Shift+N"),
+        ];
         if id != DEFAULT_FOLDER {
-            items.push(MenuItem { label: String::new(), action: None });
-            items.push(item("Rename Folder", MenuAction::RenameFolder(id)));
-            items.push(item("Delete Folder", MenuAction::DeleteFolder(id)));
+            items.push(MenuItem::separator());
+            items.push(MenuItem::new("Rename Folder", MenuAction::RenameFolder(id)));
+            items.push(MenuItem::new("Delete Folder", MenuAction::DeleteFolder(id)));
         }
-        self.menu = Some(Menu { pos: cx.mouse, items });
+        self.menu = Some(Menu::new(cx.mouse, items));
     }
 
     // -- rendering ----------------------------------------------------------
@@ -443,79 +481,77 @@ impl NotesApp {
         ui::chrome::window_buttons(left, cx, t.text)
     }
 
+    /// A 32×28 toolbar button: hover fill, darker while pressed, dimmed when
+    /// disabled or in an inactive window.
     fn icon_button(
         id: &'static str,
+        enabled: bool,
+        cx: &Cx,
         t: &Theme,
         icon: fn(&mut Scene, Bounds, Color),
         on_click: impl Fn(&mut Self, &mut Cx) + 'static,
     ) -> Div<Self> {
-        let color = t.icon;
-        div()
-            .id(id)
-            .w(32.0)
-            .h(26.0)
-            .rounded(6.0)
-            .items_center()
-            .justify_center()
-            .hover_bg(t.icon_hover_bg)
+        let ink = native::toolbar_ink(cx, t.icon);
+        let color = if enabled { ink } else { ink.alpha(ink.a * 0.4) };
+        let button = div().id(id).w(32.0).h(28.0).rounded(6.0).items_center().justify_center();
+        if !enabled {
+            return button.child(canvas(move |s, b| icon(s, b, color)).size(20.0));
+        }
+        let pressed = cx.hovered(id) && cx.mouse_down;
+        button
+            .bg_opt(pressed.then_some(t.icon_pressed_bg))
+            .hover_bg(if pressed { t.icon_pressed_bg } else { t.icon_hover_bg })
             .on_click(on_click)
             .child(canvas(move |s, b| icon(s, b, color)).size(20.0))
     }
 
     fn sidebar(&self, cx: &Cx, t: &Theme) -> Div<Self> {
         let mut header = div()
-            .h(TOOLBAR_H)
+            .h(native::TOOLBAR_H)
             .shrink_0()
             .flex_row()
             .items_center()
             .justify_between()
-            .px(12.0)
+            .pl(native::TRAFFIC_LIGHTS_X)
+            .pr(10.0)
             .window_drag();
         if let Some(buttons) = self.window_buttons(true, cx, t) {
             header = header.child(buttons);
         }
-        let header = header.child(Self::icon_button("toggle-sidebar", t, icons::sidebar, |s, _| s.sidebar_open = false));
+        let header = header.child(Self::icon_button("toggle-sidebar", true, cx, t, icons::sidebar, |s, _| s.sidebar_open = false));
 
-        let mut rows: Vec<AnyElement<Self>> = vec![
-            text("On My Computer")
-                .size(11.0)
-                .weight(Weight::Semibold)
-                .color(t.text_secondary)
-                .pl(10.0)
-                .pt(6.0)
-                .pb(6.0)
-                .into(),
-        ];
+        let mut rows: Vec<AnyElement<Self>> = vec![native::sidebar_header("On My Computer", cx).pt(4.0).into()];
         for f in &self.store.folders {
-            rows.push(self.folder_row(f.id, &f.name, self.store.count_in(f.id), icons::folder, View::Folder(f.id), t).into());
+            rows.push(self.folder_row(f.id, &f.name, self.store.count_in(f.id), icons::folder, View::Folder(f.id), cx, t).into());
         }
         let deleted = self.store.deleted_count();
         if deleted > 0 || self.view == View::Deleted {
-            rows.push(self.folder_row(u64::MAX, "Recently Deleted", deleted, icons::trash, View::Deleted, t).into());
+            rows.push(self.folder_row(u64::MAX, "Recently Deleted", deleted, icons::trash, View::Deleted, cx, t).into());
         }
 
-        let accent = t.accent;
+        // "⊕ New Folder" at the bottom, lined up with the folder icons.
+        let pressed = cx.hovered("new-folder") && cx.mouse_down;
+        let accent = if pressed { t.accent.alpha(0.6) } else { t.accent };
         let new_folder = div()
             .id("new-folder")
             .h(44.0)
             .shrink_0()
             .flex_row()
             .items_center()
-            .gap(6.0)
-            .px(16.0)
-            .cursor(CursorIcon::Pointer)
+            .gap(8.0)
+            .px(native::SIDEBAR_INSET + native::SIDEBAR_ROW_PAD)
             .on_click(|s: &mut Self, cx: &mut Cx| s.new_folder(cx))
-            .child(canvas(move |s, b| icons::plus_circle(s, b, accent)).size(18.0))
-            .child(text("New Folder").color(t.text_secondary));
+            .child(canvas(move |s, b| icons::plus_circle(s, b, accent)).size(native::SIDEBAR_ICON).shrink_0())
+            .child(text("New Folder").color(if pressed { t.text } else { t.text_secondary }).truncate());
 
         div()
-            .w(SIDEBAR_W)
+            .w(native::SIDEBAR_W)
             .h_full()
             .shrink_0()
             .flex_col()
             .bg(t.sidebar)
             .child(header)
-            .child(div().id("sidebar-scroll").scroll_y().flex_1().flex_col().px(10.0).gap(1.0).children(rows))
+            .child(div().id("sidebar-scroll").scroll_y().flex_1().flex_col().gap(1.0).pb(8.0).children(rows))
             .child(self.pairing.sidebar_row(&Self::sync_colors(t)))
             .child(new_folder)
     }
@@ -540,19 +576,22 @@ impl NotesApp {
         count: usize,
         icon: fn(&mut Scene, Bounds, Color),
         view: View,
+        cx: &Cx,
         t: &Theme,
     ) -> Div<Self> {
         let selected = self.view == view && !self.searching();
-        let accent = t.accent;
+        let accent = native::sidebar_icon(cx, t.accent);
         let name_el: AnyElement<Self> = if self.renaming == Some(id) {
             div()
                 .flex_1()
-                .h(20.0)
+                .min_w_0()
+                .h(22.0)
                 .px(4.0)
                 .items_center()
                 .rounded(4.0)
                 .bg(t.content)
-                .border(t.accent, 1.5)
+                .border(t.divider, 0.5)
+                .focus_ring(cx.is_focused("rename"), cx)
                 .child(input("rename", &self.rename).flex_1())
                 .into()
         } else {
@@ -560,14 +599,15 @@ impl NotesApp {
         };
         div()
             .id(("folder", id))
-            .h(28.0)
+            .h(native::SIDEBAR_ROW_H)
             .shrink_0()
-            .px(8.0)
-            .rounded(6.0)
+            .mx(native::SIDEBAR_INSET)
+            .px(native::SIDEBAR_ROW_PAD)
+            .rounded(native::SIDEBAR_RADIUS)
             .flex_row()
             .items_center()
-            .gap(7.0)
-            .bg_opt(selected.then_some(t.sidebar_selection))
+            .gap(8.0)
+            .bg_opt(selected.then_some(native::sidebar_selection(cx)))
             .on_mouse_down(move |s: &mut Self, cx: &mut Cx| {
                 if s.renaming.is_some_and(|r| r != id) {
                     s.finish_rename(true, cx);
@@ -586,9 +626,9 @@ impl NotesApp {
                     s.folder_menu(f, cx);
                 }
             })
-            .child(canvas(move |s, b| icon(s, b, accent)).size(18.0).shrink_0())
+            .child(canvas(move |s, b| icon(s, b, accent)).size(native::SIDEBAR_ICON).shrink_0())
             .child(name_el)
-            .child(text(count.to_string()).color(t.text_secondary).shrink_0())
+            .child(text(count.to_string()).tabular().color(t.text_secondary).shrink_0())
     }
 
     fn list_column(&self, cx: &Cx, t: &Theme) -> Div<Self> {
@@ -607,55 +647,58 @@ impl NotesApp {
         };
 
         let mut toolbar = div()
-            .h(TOOLBAR_H)
+            .h(native::TOOLBAR_H)
             .shrink_0()
             .flex_row()
             .items_center()
             .gap(8.0)
-            .pl(if self.sidebar_open { 18.0 } else { 12.0 })
-            .pr(8.0)
+            .pl(if self.sidebar_open { 22.0 } else { native::TRAFFIC_LIGHTS_X })
+            .pr(10.0)
             .window_drag();
         if !self.sidebar_open {
             if let Some(buttons) = self.window_buttons(true, cx, t) {
-                toolbar = toolbar.child(buttons.mr(6.0));
+                toolbar = toolbar.child(buttons.mr(8.0));
             }
-            toolbar = toolbar.child(Self::icon_button("toggle-sidebar", t, icons::sidebar, |s, _| s.sidebar_open = true));
+            toolbar = toolbar.child(Self::icon_button("toggle-sidebar", true, cx, t, icons::sidebar, |s, _| s.sidebar_open = true));
         }
         toolbar = toolbar
             .child(
                 div()
                     .flex_col()
                     .flex_1()
-                    .child(text(title).weight(Weight::Bold).truncate())
-                    .child(text(count).size(11.0).color(t.text_secondary).truncate()),
+                    .min_w_0()
+                    .child(text(title).weight(Weight::Bold).color(native::toolbar_ink(cx, t.text)).truncate())
+                    .child(text(count).size(11.0).tabular().color(native::toolbar_ink(cx, t.text_secondary)).truncate()),
             )
-            .child(Self::icon_button("delete-note", t, icons::trash, |s: &mut Self, cx: &mut Cx| {
+            .child(Self::icon_button("delete-note", self.selected.is_some(), cx, t, icons::trash, |s: &mut Self, cx: &mut Cx| {
                 if let Some(id) = s.selected {
                     s.delete_note(id, cx);
                 }
             }));
 
-        let list_focused = cx.is_focused("list");
+        // Notes' yellow while the list has focus in the active window; gray otherwise.
+        let list_focused = cx.is_focused("list") && cx.window_focused;
         let mut rows: Vec<AnyElement<Self>> = Vec::new();
         let mut last_section = String::new();
         let pins = !self.searching() && self.view != View::Deleted;
         for (i, n) in notes.iter().enumerate() {
             let sec = if pins && n.pinned { "Pinned".to_string() } else { section(n.modified) };
             if sec != last_section {
+                // Section headers line up with the note titles below them.
                 let header = div()
                     .flex_row()
                     .items_center()
                     .gap(4.0)
-                    .px(10.0)
+                    .px(12.0)
                     .pt(if rows.is_empty() { 4.0 } else { 16.0 })
                     .pb(6.0);
                 let header = if sec == "Pinned" {
                     let c = t.text_secondary;
-                    header.child(canvas(move |s, b| icons::pin(s, b, c)).size(12.0))
+                    header.child(canvas(move |s, b| icons::pin(s, b, c)).size(14.0).shrink_0())
                 } else {
                     header
                 };
-                rows.push(header.child(text(sec.clone()).size(12.0).weight(Weight::Bold).color(t.text)).into());
+                rows.push(header.child(text(sec.clone()).size(12.0).weight(Weight::Bold).color(t.text).truncate()).into());
                 last_section = sec;
             }
             let selected = self.selected == Some(n.id);
@@ -676,12 +719,15 @@ impl NotesApp {
             );
         }
         if notes.is_empty() {
+            // Centered in the column, as Notes shows "No Notes".
             rows.push(
                 div()
-                    .h(200.0)
+                    .grow()
+                    .min_h(120.0)
+                    .pb(native::TOOLBAR_H)
                     .items_center()
                     .justify_center()
-                    .child(text(empty).size(14.0).color(t.text_tertiary))
+                    .child(text(empty).size(15.0).weight(Weight::Medium).color(t.text_tertiary))
                     .into(),
             );
         }
@@ -710,7 +756,7 @@ impl NotesApp {
             (true, false) => (Some(t.selection_unfocused), t.text, t.text, t.text_secondary),
             _ => (None, t.text, t.text, t.text_secondary),
         };
-        let mut second = div().flex_row().gap(6.0).child(text(list_date(n.modified)).size(12.0).color(date_c).shrink_0());
+        let mut second = div().flex_row().gap(6.0).child(text(list_date(n.modified)).size(12.0).tabular().color(date_c).shrink_0());
         second = second.child(text(n.preview().to_string()).size(12.0).color(preview_c).truncate().flex_1());
         let mut row = div()
             .id(("note", id))
@@ -744,7 +790,7 @@ impl NotesApp {
     }
 
     fn editor_column(&self, cx: &Cx, t: &Theme) -> Div<Self> {
-        let accent_icon = t.icon;
+        let accent_icon = native::toolbar_ink(cx, t.icon);
         let query_set = !self.query.is_empty();
         let search = div()
             .id("search-box")
@@ -752,6 +798,7 @@ impl NotesApp {
             .h(28.0)
             .rounded(7.0)
             .bg(t.field)
+            .focus_ring(cx.is_focused("search"), cx)
             .flex_row()
             .items_center()
             .gap(6.0)
@@ -762,11 +809,12 @@ impl NotesApp {
             .child(input("search", &self.search).flex_1())
             .child_if(query_set, || {
                 let c = t.text_secondary;
+                let pressed = cx.hovered("search-clear") && cx.mouse_down;
                 div()
                     .id("search-clear")
                     .size(16.0)
                     .rounded(8.0)
-                    .bg(c.alpha(0.5))
+                    .bg(c.alpha(if pressed { 0.8 } else { 0.5 }))
                     .shrink_0()
                     .on_click(|s: &mut Self, cx: &mut Cx| {
                         s.clear_search(cx);
@@ -777,14 +825,14 @@ impl NotesApp {
             });
 
         let toolbar = div()
-            .h(TOOLBAR_H)
+            .h(native::TOOLBAR_H)
             .shrink_0()
             .flex_row()
             .items_center()
             .justify_between()
             .px(10.0)
             .window_drag()
-            .child(Self::icon_button("compose", t, icons::compose, |s: &mut Self, cx: &mut Cx| s.new_note(cx)))
+            .child(Self::icon_button("compose", true, cx, t, icons::compose, |s: &mut Self, cx: &mut Cx| s.new_note(cx)))
             .child(div().flex_row().items_center().gap(12.0).child(search).children(self.window_buttons(false, cx, t)));
 
         let note = self.selected.and_then(|id| self.store.note(id));
@@ -822,51 +870,6 @@ impl NotesApp {
 
         div().flex_1().h_full().flex_col().bg(t.content).child(toolbar).child(body)
     }
-
-    fn menu_overlay(&self, menu: &Menu, cx: &Cx, t: &Theme) -> Div<Self> {
-        let (w, h) = cx.window_size;
-        let width = 230.0;
-        let est_h: f32 = 10.0 + menu.items.iter().map(|i| if i.action.is_some() { 24.0 } else { 9.0 }).sum::<f32>();
-        let x = menu.pos.x.min(w - width - 6.0).max(6.0);
-        let y = if menu.pos.y + est_h > h - 6.0 { (menu.pos.y - est_h).max(6.0) } else { menu.pos.y };
-
-        let mut panel = div()
-            .absolute(x, y)
-            .w(width)
-            .flex_col()
-            .p(5.0)
-            .rounded(8.0)
-            .bg(t.menu_bg)
-            .border(t.menu_border, 0.5)
-            .shadow(t.shadow, 14.0, 6.0)
-            .occlude();
-        for (i, item) in menu.items.iter().enumerate() {
-            match &item.action {
-                None => panel = panel.child(div().h(1.0).mt(4.0).mb(4.0).px(6.0).child(div().flex_1().h(1.0).bg(t.menu_border))),
-                Some(action) => {
-                    let hovered = cx.hovered(("menu-item", i));
-                    let action = action.clone();
-                    panel = panel.child(
-                        div()
-                            .id(("menu-item", i))
-                            .h(24.0)
-                            .px(10.0)
-                            .rounded(5.0)
-                            .items_center()
-                            .hover_bg(t.menu_highlight)
-                            .on_click(move |s: &mut Self, cx: &mut Cx| s.run_menu(action.clone(), cx))
-                            .child(text(item.label.clone()).color(if hovered { Color::WHITE } else { t.text }).truncate()),
-                    );
-                }
-            }
-        }
-        div()
-            .inset_0()
-            .deferred()
-            .on_mouse_down(|s: &mut Self, _| s.menu = None)
-            .on_right_click(|s: &mut Self, _| s.menu = None)
-            .child(panel)
-    }
 }
 
 impl PairingHost for NotesApp {
@@ -892,7 +895,7 @@ impl App for NotesApp {
         }
         root = root.child(self.list_column(cx, &t)).child(divider()).child(self.editor_column(cx, &t));
         if let Some(menu) = &self.menu {
-            root = root.child(self.menu_overlay(menu, cx, &t));
+            root = root.child(menu.render(cx, |s: &mut Self, a, cx| s.run_menu(a, cx), |s: &mut Self, _| s.menu = None));
         }
         if let Some(sheet) = self.pairing.sheet(cx, &Self::sync_colors(&t)) {
             root = root.child(sheet);
@@ -910,9 +913,16 @@ impl App for NotesApp {
         if self.pairing.on_key(key) {
             return true;
         }
+        if let Some(menu) = &mut self.menu {
+            match menu.key(key, cx) {
+                MenuKey::Pick(a) => self.run_menu(a, cx),
+                MenuKey::Close => self.menu = None,
+                MenuKey::Stay => {}
+            }
+            return true;
+        }
         if key.is_named(NamedKey::Escape) {
-            if self.menu.take().is_some() {
-            } else if self.renaming.is_some() {
+            if self.renaming.is_some() {
                 self.finish_rename(false, cx);
             } else if cx.is_focused("search") {
                 self.clear_search(cx);
@@ -920,9 +930,6 @@ impl App for NotesApp {
             } else {
                 cx.focus("list");
             }
-            return true;
-        }
-        if self.menu.is_some() {
             return true;
         }
         if key.ctrl && !key.alt {
@@ -1130,8 +1137,25 @@ mod tests {
             assert_eq!(hits, ["Grocery List", "Pasta al limone"]);
             app.clear_search(cx);
 
+            // The context menu works from the keyboard: Down + Return pins,
+            // Escape closes, typing a letter jumps to that row.
+            let key = |k: NamedKey| KeyPress { key: Key::Named(k), text: None, ctrl: false, shift: false, alt: false };
             app.select(Some(id), cx);
             cx.mouse = Point { x: 520.0, y: 200.0 };
+            app.note_menu(id, cx);
+            assert!(app.on_key(&key(NamedKey::ArrowDown), cx));
+            assert!(app.on_key(&key(NamedKey::Enter), cx));
+            assert!(app.menu.is_none());
+            assert!(app.store.note(id).unwrap().pinned);
+            app.note_menu(id, cx);
+            assert!(app.on_key(&key(NamedKey::Escape), cx));
+            assert!(app.menu.is_none() && app.store.note(id).unwrap().pinned);
+            app.note_menu(id, cx);
+            let d = KeyPress { key: Key::Character("d".into()), text: Some("d".into()), ..key(NamedKey::Enter) };
+            app.on_key(&d, cx);
+            app.on_key(&key(NamedKey::Enter), cx);
+            assert!(app.store.note(id).unwrap().deleted_at.is_some());
+            app.recover_note(id, cx);
             app.note_menu(id, cx);
             cx.mouse = Point { x: 560.0, y: 256.0 };
         });

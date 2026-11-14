@@ -61,8 +61,9 @@ pub fn magnifier(scene: &mut Scene, b: Bounds, color: Color) {
     scene.segment(pt(x + 9.6 * s, y + 9.6 * s), pt(x + 13.5 * s, y + 13.5 * s), 1.8, color);
 }
 
+/// Fills its box (18pt in a 16pt sidebar slot, smaller next to captions).
 pub fn folder(scene: &mut Scene, b: Bounds, color: Color) {
-    let (x, y, s) = frame(b, 18.0);
+    let (x, y, s) = frame(b, b.w.min(b.h) * 18.0 / 16.0);
     outline(scene, x + 1.5 * s, y + 5.5 * s, 15.0 * s, 10.5 * s, 2.2 * s, color, 1.4);
     // Tab on top-left.
     scene.segment(pt(x + 2.2 * s, y + 5.5 * s), pt(x + 2.2 * s, y + 4.4 * s), 1.4, color);
@@ -78,13 +79,15 @@ pub fn plus_circle(scene: &mut Scene, b: Bounds, color: Color) {
     scene.segment(pt(x + 4.8 * s, y + 8.0 * s), pt(x + 11.2 * s, y + 8.0 * s), 1.4, color);
 }
 
+/// A filled push pin (SF Symbols' "pin.fill"), for the "Pinned" header.
 pub fn pin(scene: &mut Scene, b: Bounds, color: Color) {
-    let (x, y, s) = frame(b, 12.0);
-    scene.segment(pt(x + 4.0 * s, y + 2.0 * s), pt(x + 8.0 * s, y + 2.0 * s), 1.4, color);
-    scene.segment(pt(x + 4.6 * s, y + 2.0 * s), pt(x + 4.0 * s, y + 6.5 * s), 1.4, color);
-    scene.segment(pt(x + 7.4 * s, y + 2.0 * s), pt(x + 8.0 * s, y + 6.5 * s), 1.4, color);
-    scene.segment(pt(x + 2.5 * s, y + 6.8 * s), pt(x + 9.5 * s, y + 6.8 * s), 1.4, color);
-    scene.segment(pt(x + 6.0 * s, y + 6.8 * s), pt(x + 6.0 * s, y + 11.0 * s), 1.2, color);
+    let (x, y, s) = frame(b, 14.0);
+    let r = |l: f32, t: f32, w: f32, h: f32, rad: f32| (Bounds::new(x + l * s, y + t * s, w * s, h * s), rad * s);
+    for (rect, rad) in [r(4.5, 1.5, 9.0, 2.6, 1.3), r(6.0, 3.6, 6.0, 5.0, 0.8), r(3.4, 8.0, 11.2, 2.8, 1.4)] {
+        scene.rect(rect, color, rad);
+    }
+    // The needle.
+    scene.segment(pt(x + 9.0 * s, y + 10.4 * s), pt(x + 9.0 * s, y + 16.5 * s), 1.3, color);
 }
 
 pub fn xmark(scene: &mut Scene, b: Bounds, color: Color, size: f32, stroke: f32) {

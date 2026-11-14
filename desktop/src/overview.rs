@@ -4,56 +4,20 @@
 //! with a bar of spaces along the top. It follows a three-finger swipe up
 //! (or Super+Up); swiping left/right (or Super+Left/Right) changes space.
 
-use std::time::{Duration, Instant};
+pub use crate::anim::Anim;
 
 use smithay::desktop::Window;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
-use crate::state::{Desk, frame_of, win_data};
+use crate::state::{Desk, frame_of};
 
 /// Height of the strip of spaces at the top of Mission Control.
 pub const SPACES_BAR_H: f64 = 124.0;
-const MC_ANIM: Duration = Duration::from_millis(320);
-const SLIDE_ANIM: Duration = Duration::from_millis(380);
+/// Spring settings (response in seconds, damping ratio).
+const MC_SPRING: (f64, f64) = (0.42, 0.92);
+const SLIDE_SPRING: (f64, f64) = (0.48, 0.94);
 /// How far a three-finger swipe travels for a full transition.
 const SWIPE_FULL: f64 = 320.0;
-
-/// A value easing from one number to another.
-#[derive(Clone, Copy, Debug)]
-pub struct Anim {
-    from: f64,
-    to: f64,
-    start: Instant,
-    dur: Duration,
-}
-
-impl Anim {
-    pub fn fixed(v: f64) -> Self {
-        Anim { from: v, to: v, start: Instant::now(), dur: Duration::ZERO }
-    }
-
-    pub fn value(&self) -> f64 {
-        if self.dur.is_zero() {
-            return self.to;
-        }
-        let t = (self.start.elapsed().as_secs_f64() / self.dur.as_secs_f64()).min(1.0);
-        // Ease out with a gentle settle, close to macOS springs.
-        let e = 1.0 - (1.0 - t).powi(3);
-        self.from + (self.to - self.from) * e
-    }
-
-    pub fn done(&self) -> bool {
-        self.dur.is_zero() || self.start.elapsed() >= self.dur
-    }
-
-    pub fn target(&self) -> f64 {
-        self.to
-    }
-
-    fn retarget(&mut self, to: f64, dur: Duration) {
-        *self = Anim { from: self.value(), to, start: Instant::now(), dur };
-    }
-}
 
 /// A space change in progress: `from` slides out while the active space slides in.
 pub struct Slide {
@@ -73,7 +37,13 @@ pub struct Gesture {
     dx: f64,
     dy: f64,
     axis: Option<Axis>,
+    /// Mission Control's openness when the swipe began.
     base: f64,
+    /// The space the swipe started on.
+    origin: usize,
+    /// How fast the gesture's value is moving (per second), smoothed.
+    speed: f64,
+    last: Option<std::time::Instant>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -129,14 +99,14 @@ impl Desk {
         if self.spaces.mc.target() > 0.5 {
             self.close_mission_control(None);
         } else {
-            self.spaces.mc.retarget(1.0, MC_ANIM);
+            self.spaces.mc.retarget(1.0, MC_SPRING.0, MC_SPRING.1);
             self.spaces.mc_hover = None;
             self.redraw();
         }
     }
 
     pub fn close_mission_control(&mut self, focus: Option<Window>) {
-        self.spaces.mc.retarget(0.0, MC_ANIM);
+        self.spaces.mc.retarget(0.0, MC_SPRING.0, MC_SPRING.1);
         self.spaces.mc_hover = None;
         if focus.is_some() {
             self.focus(focus);
@@ -269,7 +239,7 @@ impl Desk {
         }
         let start = self.spaces.slide.take().filter(|s| s.from == n).map_or(0.0, |s| 1.0 - s.anim.value());
         let mut anim = Anim::fixed(start);
-        anim.retarget(1.0, SLIDE_ANIM);
+        anim.retarget(1.0, SLIDE_SPRING.0, SLIDE_SPRING.1);
         self.spaces.slide = Some(Slide { from, anim });
         let top = self.spaces.mru.iter().find(|w| self.space.elements().any(|x| x == *w)).cloned();
         self.focus(top.or_else(|| self.space.elements().last().cloned()));
@@ -369,12 +339,11 @@ impl Desk {
     pub fn switcher_commit(&mut self) {
         let Some(s) = self.spaces.switcher.take() else { return };
         if let Some(w) = s.windows.get(s.index).cloned() {
-            if let Some(i) = self.minimized.iter().position(|m| m == &w) {
-                self.minimized.remove(i);
-                let loc = win_data(&w).borrow_mut().parked_at.take();
-                self.place(&w, loc);
+            if self.minimized.contains(&w) {
+                self.restore(w);
+            } else {
+                self.focus(Some(w));
             }
-            self.focus(Some(w));
         }
         self.redraw();
     }
@@ -383,7 +352,8 @@ impl Desk {
 
     pub fn swipe_begin(&mut self, fingers: u32) {
         let base = self.spaces.mc.value();
-        self.spaces.gesture = Some(Gesture { fingers, base, ..Default::default() });
+        let origin = self.spaces.active;
+        self.spaces.gesture = Some(Gesture { fingers, base, origin, ..Default::default() });
     }
 
     pub fn swipe_update(&mut self, dx: f64, dy: f64) {
@@ -397,19 +367,25 @@ impl Desk {
         if g.axis.is_none() && (g.dx.abs() > 12.0 || g.dy.abs() > 12.0) {
             g.axis = Some(if g.dy.abs() > g.dx.abs() { Axis::Vertical } else { Axis::Horizontal });
         }
+        let now = std::time::Instant::now();
+        let dt = g.last.map_or(0.016, |t| now.duration_since(t).as_secs_f64().max(0.001));
+        g.last = Some(now);
         match g.axis {
             Some(Axis::Vertical) => {
+                let before = self.spaces.mc.value();
                 let v = (g.base - g.dy / SWIPE_FULL).clamp(0.0, 1.0);
+                g.speed = g.speed * 0.6 + (v - before) / dt * 0.4;
                 self.spaces.mc = Anim::fixed(v);
             }
             Some(Axis::Horizontal) => {
-                // Follow the fingers: show the neighbor sliding in.
-                let target = if g.dx < 0.0 { self.spaces.active + 1 } else { self.spaces.active.wrapping_sub(1) };
-                let progress = (g.dx.abs() / width * 1.6).min(1.0);
-                if target < self.spaces.parked.len() && progress > 0.0 {
-                    // Temporarily treat the neighbor as arriving.
-                    self.spaces.slide = None;
-                    self.preview_slide(target, progress);
+                // Follow the fingers: the neighbor slides in alongside.
+                let (origin, gdx) = (g.origin, g.dx);
+                let target = if gdx < 0.0 { origin + 1 } else { origin.wrapping_sub(1) };
+                let progress = (gdx.abs() / width * 1.6).min(1.0);
+                let before = self.spaces.slide.as_ref().map_or(0.0, |s| s.anim.value());
+                g.speed = g.speed * 0.6 + (progress - before) / dt * 0.4;
+                if target < self.spaces.parked.len() {
+                    self.preview_slide(origin, target, progress);
                 }
             }
             None => {}
@@ -417,15 +393,26 @@ impl Desk {
         self.redraw();
     }
 
-    fn preview_slide(&mut self, target: usize, progress: f64) {
-        let from = self.spaces.active;
-        self.park_active();
-        self.spaces.active = target;
-        for (w, loc) in std::mem::take(&mut self.spaces.parked[target]) {
-            self.space.map_element(w, loc, false);
+    /// Shows `target` sliding in over `origin`, `progress` of the way.
+    fn preview_slide(&mut self, origin: usize, target: usize, progress: f64) {
+        if self.spaces.active != target {
+            // Swap which space is live (the fingers may have changed direction).
+            let back = self.spaces.active;
+            self.park_active();
+            if back != origin {
+                // Bring the origin back first.
+                for (w, loc) in std::mem::take(&mut self.spaces.parked[origin]) {
+                    self.space.map_element(w, loc, false);
+                }
+                self.spaces.active = origin;
+                self.park_active();
+            }
+            self.spaces.active = target;
+            for (w, loc) in std::mem::take(&mut self.spaces.parked[target]) {
+                self.space.map_element(w, loc, false);
+            }
         }
-        self.spaces.slide = Some(Slide { from, anim: Anim::fixed(progress) });
-        // Put things back if the user lets go early; see swipe_end.
+        self.spaces.slide = Some(Slide { from: origin, anim: Anim::fixed(progress) });
     }
 
     pub fn swipe_end(&mut self, cancelled: bool) {
@@ -433,15 +420,18 @@ impl Desk {
         match g.axis {
             Some(Axis::Vertical) => {
                 let v = self.spaces.mc.value();
-                let open = !cancelled && if g.base > 0.5 { v > 0.7 } else { v > 0.3 };
-                self.spaces.mc.retarget(if open { 1.0 } else { 0.0 }, MC_ANIM);
+                // A quick flick counts even if it didn't travel far.
+                let open = !cancelled && (if g.base > 0.5 { v > 0.7 } else { v > 0.3 } || g.speed > 2.5) && g.speed > -2.5;
+                let (r, d) = MC_SPRING;
+                self.spaces.mc.fling(if open { 1.0 } else { 0.0 }, g.speed, r, d);
             }
             Some(Axis::Horizontal) => {
                 if let Some(slide) = self.spaces.slide.take() {
                     let progress = slide.anim.value();
-                    if !cancelled && progress > 0.3 {
+                    let (r, d) = SLIDE_SPRING;
+                    if !cancelled && (progress > 0.3 || g.speed > 2.0) {
                         let mut anim = slide.anim;
-                        anim.retarget(1.0, SLIDE_ANIM);
+                        anim.fling(1.0, g.speed.max(0.0), r, d);
                         self.spaces.slide = Some(Slide { from: slide.from, anim });
                         self.focus_top();
                     } else {
@@ -454,7 +444,7 @@ impl Desk {
                             self.space.map_element(w, loc, false);
                         }
                         let mut anim = Anim::fixed(1.0 - progress);
-                        anim.retarget(1.0, SLIDE_ANIM);
+                        anim.fling(1.0, (-g.speed).max(0.0), r, d);
                         self.spaces.slide = Some(Slide { from: arriving, anim });
                     }
                 }

@@ -27,7 +27,22 @@ use smithay::wayland::selection::wlr_data_control::DataControlState;
 use smithay::wayland::shell::wlr_layer::{Layer, WlrLayerShellState};
 use smithay::wayland::viewporter::ViewporterState;
 
+use crate::anim::Anim;
 use crate::grabs::Edges;
+
+/// A window flying into its taskbar button.
+pub struct Minimizing {
+    pub window: Window,
+    pub loc: Point<i32, Logical>,
+    pub from: Rectangle<f64, Logical>,
+    pub to: Rectangle<f64, Logical>,
+    pub anim: Anim,
+}
+
+/// Spring settings (response in seconds, damping ratio) for window motion.
+pub const OPEN_SPRING: (f64, f64) = (0.36, 0.8);
+pub const MINIMIZE_SPRING: (f64, f64) = (0.42, 1.0);
+pub const ZOOM_SPRING: (f64, f64) = (0.38, 0.92);
 
 /// Height of the title bar drawn above windows that let us decorate them.
 pub const TITLEBAR_H: i32 = 32;
@@ -57,7 +72,13 @@ pub enum Hit {
 /// Per-window bookkeeping, kept in the window's user data.
 #[derive(Default)]
 pub struct WinData {
-    pub opened: Option<Instant>,
+    /// The opening animation (0 → 1), while it runs.
+    pub open: Option<Anim>,
+    /// The window is shown morphing from one frame to another (zoom, coming
+    /// back from the taskbar), with whether it also fades in.
+    pub morph: Option<(Rectangle<f64, Logical>, Rectangle<f64, Logical>, Anim, bool)>,
+    /// Where its taskbar button is, so minimizing can fly into it.
+    pub taskbar_rect: Option<Rectangle<i32, Logical>>,
     /// Where the window was before zooming, to restore it.
     pub restore: Option<Rectangle<i32, Logical>>,
     /// Where a minimized window was.
@@ -75,6 +96,7 @@ pub struct Desk {
     pub space: Space<Window>,
     pub popups: PopupManager,
     pub minimized: Vec<Window>,
+    pub minimizing: Vec<Minimizing>,
     /// New windows wait here until their first frame arrives.
     pub unmapped: Vec<Window>,
 
@@ -170,6 +192,7 @@ impl Desk {
             space: Space::default(),
             popups: PopupManager::default(),
             minimized: Vec::new(),
+            minimizing: Vec::new(),
             unmapped: Vec::new(),
             compositor_state,
             xdg_shell_state,
@@ -367,7 +390,14 @@ impl Desk {
     }
 
     pub fn minimize(&mut self, window: &Window) {
-        win_data(window).borrow_mut().parked_at = self.space.element_location(window);
+        let loc = self.space.element_location(window);
+        win_data(window).borrow_mut().parked_at = loc;
+        if let Some(loc) = loc {
+            let from = frame_of(window, loc).to_f64();
+            let to = self.taskbar_target(window);
+            let (r, d) = MINIMIZE_SPRING;
+            self.minimizing.push(Minimizing { window: window.clone(), loc, from, to, anim: Anim::spring(0.0, 1.0, r, d) });
+        }
         self.space.unmap_elem(window);
         self.minimized.push(window.clone());
         self.focus_top();
@@ -376,16 +406,40 @@ impl Desk {
     /// Brings back the most recently minimized window.
     pub fn unminimize_last(&mut self) {
         if let Some(window) = self.minimized.pop() {
-            let loc = win_data(&window).borrow_mut().parked_at.take();
-            self.place(&window, loc);
-            self.focus(Some(window));
+            self.restore(window);
         }
+    }
+
+    /// Puts a minimized window back, growing it out of its taskbar button.
+    pub fn restore(&mut self, window: Window) {
+        self.minimized.retain(|w| w != &window);
+        self.minimizing.retain(|m| m.window != window);
+        let loc = win_data(&window).borrow_mut().parked_at.take();
+        self.place(&window, loc);
+        if let Some(loc) = self.space.element_location(&window) {
+            let from = self.taskbar_target(&window);
+            let to = frame_of(&window, loc).to_f64();
+            let (r, d) = MINIMIZE_SPRING;
+            win_data(&window).borrow_mut().morph = Some((from, to, Anim::spring(0.0, 1.0, r, d), true));
+        }
+        self.focus(Some(window));
+    }
+
+    /// Where a window shrinks to when minimized: its taskbar button, or the
+    /// middle of the bottom edge.
+    fn taskbar_target(&self, window: &Window) -> Rectangle<f64, Logical> {
+        if let Some(r) = win_data(window).borrow().taskbar_rect {
+            return r.to_f64();
+        }
+        let out = self.output_geometry().to_f64();
+        Rectangle::new((out.loc.x + out.size.w / 2.0 - 24.0, out.loc.y + out.size.h - 44.0).into(), (48.0, 36.0).into())
     }
 
     /// Fills the screen with the window, or puts it back where it was.
     pub fn zoom(&mut self, window: &Window) {
         let Some(toplevel) = window.toplevel() else { return };
         let data = win_data(window);
+        let before = self.space.element_location(window).map(|l| frame_of(window, l).to_f64());
         let restore = data.borrow_mut().restore.take();
         match restore {
             Some(rect) => {
@@ -408,6 +462,14 @@ impl Desk {
             }
         }
         toplevel.send_pending_configure();
+        // Grow (or shrink) smoothly to the new frame while the app resizes.
+        if let (Some(from), Some(loc)) = (before, self.space.element_location(window)) {
+            let size = toplevel.with_pending_state(|s| s.size).unwrap_or(window.geometry().size);
+            let top = if is_ssd(window) { TITLEBAR_H } else { 0 };
+            let to = Rectangle::<i32, Logical>::new((loc.x, loc.y - top).into(), (size.w, size.h + top).into()).to_f64();
+            let (r, d) = ZOOM_SPRING;
+            data.borrow_mut().morph = Some((from, to, Anim::spring(0.0, 1.0, r, d), false));
+        }
         self.redraw();
     }
 

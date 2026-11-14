@@ -6,6 +6,7 @@
 //! commands from stdin (see `backend/headless.rs`).
 //! `-c <command>` starts a program once the desktop is up.
 
+mod anim;
 mod backend;
 mod config;
 mod grabs;

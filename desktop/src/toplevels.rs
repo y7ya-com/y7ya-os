@@ -10,6 +10,7 @@ use smithay::reexports::wayland_protocols_wlr::foreign_toplevel::v1::server::zwl
     self as manager, ZwlrForeignToplevelManagerV1,
 };
 use smithay::reexports::wayland_server::{Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource};
+use smithay::utils::Rectangle;
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 
@@ -179,12 +180,11 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, Window> for Desk {
         let maximized = win_data(window).borrow().restore.is_some();
         match request {
             handle::Request::Activate { .. } => {
-                if let Some(i) = desk.minimized.iter().position(|w| w == window) {
-                    let w = desk.minimized.remove(i);
-                    let loc = win_data(&w).borrow_mut().parked_at.take();
-                    desk.place(&w, loc);
+                if desk.minimized.contains(window) {
+                    desk.restore(window.clone());
+                } else {
+                    desk.focus(Some(window.clone()));
                 }
-                desk.focus(Some(window.clone()));
             }
             handle::Request::Close => desk.close(window),
             handle::Request::SetMinimized => {
@@ -193,12 +193,16 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, Window> for Desk {
                 }
             }
             handle::Request::UnsetMinimized => {
-                if let Some(i) = desk.minimized.iter().position(|w| w == window) {
-                    let w = desk.minimized.remove(i);
-                    let loc = win_data(&w).borrow_mut().parked_at.take();
-                    desk.place(&w, loc);
-                    desk.focus(Some(w));
+                if desk.minimized.contains(window) {
+                    desk.restore(window.clone());
                 }
+            }
+            // The taskbar says where this window's button is (relative to its
+            // own surface), so minimizing can fly into it.
+            handle::Request::SetRectangle { surface, x, y, width, height } => {
+                let origin = desk.layer_origin(&surface);
+                win_data(window).borrow_mut().taskbar_rect = (width > 0 && height > 0)
+                    .then(|| Rectangle::new((origin.x + x, origin.y + y).into(), (width, height).into()));
             }
             handle::Request::SetMaximized if !maximized => desk.zoom(window),
             handle::Request::UnsetMaximized if maximized => desk.zoom(window),

@@ -78,6 +78,17 @@ impl Desk {
         true
     }
 
+    /// Where a layer surface (like the taskbar) sits on screen; the output's
+    /// corner if it's not one.
+    pub fn layer_origin(&self, surface: &WlSurface) -> Point<i32, Logical> {
+        let out = self.output_geometry();
+        let Some(output) = &self.output else { return out.loc };
+        let map = layer_map_for_output(output);
+        map.layer_for_surface(surface, WindowSurfaceType::ALL)
+            .and_then(|l| map.layer_geometry(l))
+            .map_or(out.loc, |g| g.loc + out.loc)
+    }
+
     /// The part of the screen windows may use (minus the menu bar and such).
     pub fn usable_area(&self) -> Rectangle<i32, Logical> {
         let out = self.output_geometry();

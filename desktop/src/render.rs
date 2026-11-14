@@ -30,7 +30,6 @@ use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 use crate::overview::SPACES_BAR_H;
 use crate::state::{Desk, LIGHT_GAP, LIGHT_R, LIGHT_X, RADIUS, TITLEBAR_H, frame_of, is_ssd, win_data};
 
-const OPEN_ANIM: Duration = Duration::from_millis(220);
 /// How far shadows reach past a window frame: the soft layer's blur (3σ)
 /// plus its drop, with room to spare so it always fades out fully.
 const SHADOW_MARGIN: i32 = 120;
@@ -152,29 +151,51 @@ struct WinLook {
 struct Xf {
     pivot: Point<f64, Logical>,
     scale: f64,
+    /// Vertical scale; equal to `scale` except while a window morphs between
+    /// shapes (zooming, minimizing into a taskbar button).
+    scale_y: f64,
     offset: Point<f64, Logical>,
 }
 
 impl Xf {
     fn identity() -> Self {
-        Xf { pivot: Point::from((0.0, 0.0)), scale: 1.0, offset: Point::from((0.0, 0.0)) }
+        Xf::uniform(Point::from((0.0, 0.0)), 1.0, Point::from((0.0, 0.0)))
+    }
+
+    fn uniform(pivot: Point<f64, Logical>, scale: f64, offset: Point<f64, Logical>) -> Self {
+        Xf { pivot, scale, scale_y: scale, offset }
     }
 
     /// Maps rectangle `from` onto `to` (same aspect ratio assumed).
     fn fit(from: Rectangle<f64, Logical>, to: Rectangle<f64, Logical>) -> Self {
-        Xf { pivot: from.loc, scale: to.size.w / from.size.w, offset: to.loc - from.loc }
+        Xf::uniform(from.loc, to.size.w / from.size.w, to.loc - from.loc)
+    }
+
+    /// Maps rectangle `from` exactly onto `to`, stretching if their shapes differ.
+    fn stretch(from: Rectangle<f64, Logical>, to: Rectangle<f64, Logical>) -> Self {
+        Xf { pivot: from.loc, scale: to.size.w / from.size.w, scale_y: to.size.h / from.size.h, offset: to.loc - from.loc }
     }
 
     fn rect(&self, r: Rectangle<i32, Logical>) -> Rectangle<i32, Logical> {
-        let loc = (r.loc.to_f64() - self.pivot).upscale(self.scale) + self.pivot + self.offset;
-        Rectangle::new(loc.to_i32_round(), r.size.to_f64().upscale(self.scale).to_i32_round())
+        let d = r.loc.to_f64() - self.pivot;
+        let loc = Point::<f64, Logical>::from((d.x * self.scale, d.y * self.scale_y)) + self.pivot + self.offset;
+        let size = Size::<f64, Logical>::from((r.size.w as f64 * self.scale, r.size.h as f64 * self.scale_y));
+        Rectangle::new(loc.to_i32_round(), size.to_i32_round())
     }
 
     fn wrap<E: Element>(&self, e: E, out_scale: f64) -> Moved<E> {
         let pivot: Point<i32, Physical> = self.pivot.to_physical_precise_round(out_scale);
         let offset: Point<i32, Physical> = self.offset.to_physical_precise_round(out_scale);
-        RelocateRenderElement::from_element(RescaleRenderElement::from_element(e, pivot, self.scale), offset, Relocate::Relative)
+        let scale = Scale::from((self.scale, self.scale_y));
+        RelocateRenderElement::from_element(RescaleRenderElement::from_element(e, pivot, scale), offset, Relocate::Relative)
     }
+}
+
+fn lerp_rect(a: Rectangle<f64, Logical>, b: Rectangle<f64, Logical>, t: f64) -> Rectangle<f64, Logical> {
+    Rectangle::new(
+        Point::from((lerp(a.loc.x, b.loc.x, t), lerp(a.loc.y, b.loc.y, t))),
+        Size::from((lerp(a.size.w, b.size.w, t).max(1.0), lerp(a.size.h, b.size.h, t).max(1.0))),
+    )
 }
 
 pub struct Look {
@@ -298,10 +319,6 @@ fn win_look(window: &Window) -> &RefCell<WinLook> {
     window.user_data().get::<RefCell<WinLook>>().unwrap()
 }
 
-fn ease_out(t: f32) -> f32 {
-    1.0 - (1.0 - t).powi(3)
-}
-
 fn lerp(a: f64, b: f64, t: f64) -> f64 {
     a + (b - a) * t
 }
@@ -370,21 +387,54 @@ pub fn elements(desk: &mut Desk, look: &mut Look, renderer: &mut GlesRenderer) -
     }
 
     let focused = desk.focused_window();
+    // Windows shrinking into the taskbar draw on top of everything else.
+    let minimizing: Vec<(Window, Point<i32, Logical>, Rectangle<f64, Logical>, Rectangle<f64, Logical>, f64)> = desk
+        .minimizing
+        .iter()
+        .map(|m| (m.window.clone(), m.loc, m.from, m.to, m.anim.value()))
+        .collect();
+    desk.minimizing.retain(|m| !m.anim.done());
+    for (window, loc, from, to, t) in minimizing.iter().rev() {
+        desk.needs_redraw = true;
+        let frame = frame_of(window, *loc).to_f64();
+        let xf = Xf::stretch(frame, lerp_rect(*from, *to, t.clamp(0.0, 1.0)));
+        let alpha = (1.0 - t * 0.85).clamp(0.0, 1.0) as f32;
+        draw_window(desk, &mut cx, window, *loc, xf, alpha, false, &mut out);
+    }
+
     let windows = desk.visible_windows();
     for (window, loc, slide) in windows.iter().rev() {
         let frame = frame_of(window, *loc).to_f64();
-        let opening = win_data(window).borrow().opened.map_or(1.0, |t| {
-            (t.elapsed().as_secs_f32() / OPEN_ANIM.as_secs_f32()).min(1.0)
-        });
-        if opening < 1.0 {
+        let (open, morph) = {
+            let mut data = win_data(window).borrow_mut();
+            if data.open.is_some_and(|a| a.done()) {
+                data.open = None;
+            }
+            if data.morph.as_ref().is_some_and(|m| m.2.done()) {
+                data.morph = None;
+            }
+            (data.open, data.morph.as_ref().map(|(from, to, a, fade)| (*from, *to, a.value(), *fade)))
+        };
+        if open.is_some() || morph.is_some() {
             desk.needs_redraw = true;
         }
-        let e = ease_out(opening) as f64;
-        let mut xf = Xf {
-            pivot: frame.loc + frame.size.to_point().downscale(2.0),
-            scale: 0.92 + 0.08 * e,
-            offset: Point::from((*slide, 0.0)),
-        };
+        // Opening: grows from 88% with a soft spring while fading in.
+        let grow = open.map_or(1.0, |a| a.value());
+        let mut alpha = open.map_or(1.0, |a| (a.start_elapsed() / 0.14).min(1.0)) as f32;
+        let mut xf = Xf::uniform(
+            frame.loc + frame.size.to_point().downscale(2.0),
+            0.88 + 0.12 * grow,
+            Point::from((*slide, 0.0)),
+        );
+        // Zooming or coming back from the taskbar: morph from the old shape.
+        if let Some((from, to, t, fade)) = morph {
+            let mut xf_m = Xf::stretch(frame, lerp_rect(from, to, t));
+            xf_m.offset.x += *slide;
+            xf = xf_m;
+            if fade {
+                alpha = (0.15 + 0.85 * t).clamp(0.0, 1.0) as f32;
+            }
+        }
         if let Some((_, target)) = layout.iter().find(|(w, _)| w == window) {
             let to = Rectangle::new(
                 Point::from((lerp(frame.loc.x, target.loc.x, mc), lerp(frame.loc.y, target.loc.y, mc))),
@@ -393,7 +443,7 @@ pub fn elements(desk: &mut Desk, look: &mut Look, renderer: &mut GlesRenderer) -
             xf = Xf::fit(frame, to);
         }
         let active = focused.as_ref() == Some(window) && mc < 0.5;
-        draw_window(desk, &mut cx, window, *loc, xf, e as f32, active, &mut out);
+        draw_window(desk, &mut cx, window, *loc, xf, alpha, active, &mut out);
     }
 
     if mc > 0.0 {
@@ -537,8 +587,9 @@ fn draw_window(desk: &Desk, cx: &mut Ctx, window: &Window, loc: Point<i32, Logic
             frame.loc - Point::from((SHADOW_MARGIN, SHADOW_MARGIN)),
             (frame.size.w + 2 * SHADOW_MARGIN, frame.size.h + 2 * SHADOW_MARGIN).into(),
         );
-        let m = SHADOW_MARGIN as f32 * s;
-        let (fw, fh) = (frame.size.w as f32 * s, frame.size.h as f32 * s);
+        let sy = xf.scale_y as f32;
+        let (mx, my) = (SHADOW_MARGIN as f32 * s, SHADOW_MARGIN as f32 * sy);
+        let (fw, fh) = (frame.size.w as f32 * s, frame.size.h as f32 * sy);
         // (sigma, drop, opacity) per layer; the active window floats higher.
         let (edge, mid, far) = match (active, dark) {
             (true, false) => ([0.6, 0.0, 0.22], [5.0, 2.0, 0.12], [26.0, 20.0, 0.30]),
@@ -554,7 +605,7 @@ fn draw_window(desk: &Desk, cx: &mut Ctx, window: &Window, loc: Point<i32, Logic
             alpha,
             vec![
                 ("scale", vec![scale as f32]),
-                ("rect", vec![m, m, fw, fh]),
+                ("rect", vec![mx, my, fw, fh]),
                 ("radius", vec![RADIUS * s]),
                 ("edge", k(edge)),
                 ("mid", k(mid)),

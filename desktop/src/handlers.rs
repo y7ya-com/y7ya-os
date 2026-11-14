@@ -1,7 +1,6 @@
 //! Wayland protocol plumbing: which protocols we speak and how windows come
 //! and go.
 
-use std::time::Instant;
 
 use smithay::backend::renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state};
 use smithay::desktop::{
@@ -69,7 +68,8 @@ impl CompositorHandler for Desk {
                     let has_buffer = with_renderer_surface_state(surface, |s| s.buffer().is_some()).unwrap_or(false);
                     if has_buffer {
                         self.unmapped.remove(i);
-                        win_data(&window).borrow_mut().opened = Some(Instant::now());
+                        let (r, d) = crate::state::OPEN_SPRING;
+                        win_data(&window).borrow_mut().open = Some(crate::anim::Anim::spring(0.0, 1.0, r, d));
                         self.place(&window, None);
                         self.focus(Some(window.clone()));
                     }

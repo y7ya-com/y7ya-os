@@ -30,11 +30,11 @@ pub fn conversation(app: &mut AssistantApp) {
     app.items = vec![
         Item::User("Switch to dark mode".into()),
         done("a1", "set_appearance", "Changed appearance to Dark", Some(("set_appearance", json!({ "mode": "light" })))),
-        Item::Reply("Done \u{2014} you're in Dark mode now, and apps that follow the system switch too.".into()),
+        Item::Reply("Done \u{2014} you\u{2019}re in Dark mode now, and apps that follow the system switch too.".into()),
         Item::User("Set volume to 30% and tell me what Wi-Fi I'm on".into()),
         done("s1", "set_volume", "Set volume to 30%", Some(("set_volume", json!({ "percent": 55 })))),
         done("w1", "get_wifi", "Checked Wi-Fi", None),
-        Item::Reply("Volume is at 30%. You're on \u{201c}Vodafone75DB8D_19\u{201d} with a good signal.".into()),
+        Item::Reply("Volume is at 30%. You\u{2019}re on \u{201c}Vodafone75DB8D_19\u{201d} with a good signal.".into()),
         Item::User("Connect to my phone's hotspot".into()),
         done("w2", "list_wifi_networks", "Found 5 Wi-Fi networks", None),
         Item::Tool(Card {
@@ -63,7 +63,7 @@ pub fn signed_out(app: &mut AssistantApp) {
 }
 
 pub fn open_picker(app: &mut AssistantApp) {
-    app.picker = true;
+    app.toggle_picker();
 }
 
 pub fn empty(app: &mut AssistantApp) {

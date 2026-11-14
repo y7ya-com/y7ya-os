@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde_json::Value;
-use ui::widgets::SPINNER_FRAME;
+use ui::widgets::{Menu, MenuKey, SPINNER_FRAME};
 use ui::*;
 
 use crate::backend::{self, Event, Kind, Status, Turn};
@@ -110,7 +110,8 @@ pub struct AssistantApp {
     seq: u64,
     busy_since: Instant,
     inbox: Arc<Inbox>,
-    picker: bool,
+    /// The backend menu, while open.
+    picker: Option<Menu<Kind>>,
     /// What the user did on cards since the last turn, told to the model next time.
     notes: Vec<String>,
     /// Remember the backend choice (off for snapshots).
@@ -137,7 +138,7 @@ impl AssistantApp {
             seq: 0,
             busy_since: Instant::now(),
             inbox,
-            picker: false,
+            picker: None,
             notes: Vec::new(),
             persist,
             make_ctx: Ctx::system,
@@ -188,7 +189,7 @@ impl AssistantApp {
         if text.is_empty() || self.running() {
             return;
         }
-        self.picker = false;
+        self.picker = None;
         self.input.borrow_mut().set_text(&mut cx.text.fonts, "");
         self.items.push(Item::User(text.clone()));
         cx.scroll_to_bottom("chat-scroll");
@@ -235,13 +236,13 @@ impl AssistantApp {
         self.items.clear();
         self.session = None;
         self.notes.clear();
-        self.picker = false;
+        self.picker = None;
         self.input.borrow_mut().set_text(&mut cx.text.fonts, "");
         cx.focus("input");
     }
 
     pub fn set_backend(&mut self, kind: Kind, cx: &mut Cx) {
-        self.picker = false;
+        self.picker = None;
         if kind == self.kind {
             return;
         }
@@ -255,6 +256,14 @@ impl AssistantApp {
             self.items.push(Item::Divider(format!("New conversation with {}", kind.name())));
             cx.scroll_to_bottom("chat-scroll");
         }
+    }
+
+    /// Opens or closes the backend menu (placed under its button when drawn).
+    pub fn toggle_picker(&mut self) {
+        self.picker = match self.picker {
+            Some(_) => None,
+            None => Some(Menu::new(Point::default(), self.picker_items()).with_id("pick").right_aligned()),
+        };
     }
 
     fn card_mut(&mut self, id: &str) -> Option<&mut Card> {
@@ -289,7 +298,7 @@ impl AssistantApp {
             Event::Error(e) => self.items.push(Item::Error(e)),
             Event::Done => {
                 self.turn = None;
-                self.finish_running("Didn't finish");
+                self.finish_running("Didn\u{2019}t finish");
             }
         }
     }
@@ -397,10 +406,16 @@ impl App for AssistantApp {
     }
 
     fn on_key(&mut self, key: &KeyPress, cx: &mut Cx) -> bool {
+        if let Some(menu) = &mut self.picker {
+            match menu.key(key, cx) {
+                MenuKey::Pick(kind) => self.set_backend(kind, cx),
+                MenuKey::Close => self.picker = None,
+                MenuKey::Stay => {}
+            }
+            return true;
+        }
         if key.is_named(NamedKey::Escape) {
-            if self.picker {
-                self.picker = false;
-            } else if self.running() {
+            if self.running() {
                 self.stop();
             } else if self.quick {
                 cx.close_window();

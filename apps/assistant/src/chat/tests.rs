@@ -117,3 +117,26 @@ fn stopping_marks_cards_and_missing_backends_show_setup() {
         assert!(matches!(app.items.last(), Some(Item::Divider(_))));
     });
 }
+
+#[test]
+fn backend_menu_works_from_the_keyboard() {
+    render(|app, cx| {
+        app.set_status(Kind::Claude, Status::Ready);
+        app.set_status(Kind::Codex, Status::Ready);
+        let key = |k: NamedKey| KeyPress { key: Key::Named(k), text: None, ctrl: false, shift: false, alt: false };
+
+        // Escape closes the menu without switching.
+        app.toggle_picker();
+        assert!(app.on_key(&key(NamedKey::Escape), cx));
+        assert!(app.picker.is_none());
+        assert_eq!(app.kind, Kind::Claude);
+
+        // Down, Down, Return picks the second row.
+        app.toggle_picker();
+        app.on_key(&key(NamedKey::ArrowDown), cx);
+        app.on_key(&key(NamedKey::ArrowDown), cx);
+        app.on_key(&key(NamedKey::Enter), cx);
+        assert!(app.picker.is_none());
+        assert_eq!(app.kind, Kind::Codex);
+    });
+}

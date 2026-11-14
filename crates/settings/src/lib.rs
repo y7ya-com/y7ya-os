@@ -39,6 +39,7 @@
 //! Writers save atomically (write a temporary file, then rename), so readers
 //! never see half a file. [`watch`] lets the desktop and apps react live.
 
+pub mod look;
 mod watch;
 
 use std::collections::BTreeMap;

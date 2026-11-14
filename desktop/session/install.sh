@@ -9,6 +9,8 @@ for b in y7-desktop y7-shell y7-syncd notes calculator textedit assistant files 
     [ -x "target/release/$b" ] && install -Dm755 "target/release/$b" "$HOME/.local/bin/$b"
 done
 install -Dm755 desktop/session/y7ya-os-session "$HOME/.local/bin/y7ya-os-session"
+# The Mac look for third-party apps (per user, only used inside y7ya-os).
+desktop/session/theme.sh || echo "Couldn't install the look for third-party apps; re-run desktop/session/theme.sh"
 for f in apps/*/*.desktop; do
     install -Dm644 "$f" "$HOME/.local/share/applications/$(basename "$f")"
 done

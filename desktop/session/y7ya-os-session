@@ -6,5 +6,11 @@ export XDG_SESSION_DESKTOP=y7ya-os
 export XDG_SESSION_TYPE=wayland
 export QT_QPA_PLATFORM=wayland
 export MOZ_ENABLE_WAYLAND=1
+# The Mac cursors from theme.sh, for the desktop's own pointer (the desktop
+# gives the apps it starts the rest of the look).
+look="${Y7YA_LOOK_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/y7ya-os/look}"
+if [ -e "$look/ready" ]; then
+    export XCURSOR_THEME=WhiteSur-cursors XCURSOR_PATH="$look/cursors" XCURSOR_SIZE="${XCURSOR_SIZE:-24}"
+fi
 mkdir -p "$HOME/.local/state/y7ya-os"
 exec y7-desktop --session >"$HOME/.local/state/y7ya-os/session.log" 2>&1

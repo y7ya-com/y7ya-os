@@ -10,6 +10,7 @@ mod input;
 mod platform;
 mod renderer;
 mod scene;
+mod scroll;
 mod text;
 mod widget;
 pub mod widgets;

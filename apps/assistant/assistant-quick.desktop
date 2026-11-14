@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Quick Ask Assistant
+Comment=A Spotlight-style panel for changing a setting; bind it to a hotkey
+Exec=assistant --quick
+Icon=preferences-system
+Terminal=false
+NoDisplay=true
+Categories=Settings;System;
+StartupWMClass=assistant-quick

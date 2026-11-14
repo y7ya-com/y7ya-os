@@ -11,6 +11,7 @@ mod platform;
 mod renderer;
 mod scene;
 mod text;
+pub mod widgets;
 
 pub use app::{App, WindowOptions, run, snapshot};
 pub use cx::{Cx, Waker};

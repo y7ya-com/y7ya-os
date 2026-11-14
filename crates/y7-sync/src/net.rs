@@ -12,55 +12,50 @@
 //! sending the secret, and both sides remember each other's key.
 //!
 //! Sync: paired devices keep a connection open and run Automerge's sync
-//! protocol over it, so edits show up on the other device within a moment.
+//! protocol over it for every document, so edits show up on the other device
+//! within a moment. Protocols, newest first:
+//!
+//! - `y7/sync/2`: one stream; each frame is `[id length: u8][doc id][sync message]`.
+//!   Either side may mention a document the other doesn't have yet; it's
+//!   created on arrival, so every device ends up holding (and relaying) all
+//!   documents.
+//! - `notes/sync/1`: one stream of bare sync messages for the `notes`
+//!   document. Spoken by the first Notes releases; still accepted, and used
+//!   when dialing a device that doesn't offer version 2.
+//!
+//! The network only starts once there is a paired device or pairing begins,
+//! so a device that syncs with nothing stays completely idle.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use automerge::sync::{self, SyncDoc};
-use iroh::endpoint::{Connection, RecvStream, SendStream, presets};
+use iroh::endpoint::{ConnectOptions, Connection, RecvStream, SendStream, presets};
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey, TransportAddr};
 use iroh_mdns_address_lookup::MdnsAddressLookup;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, mpsc, watch};
 
-use crate::model::now;
-use crate::notebook::{Notebook, write_atomic};
+use crate::doc::{Doc, write_atomic};
+use crate::{Hub, Listener, NOTES_DOC, PeerStatus, Status, now, valid_doc_id};
 
-const SYNC_ALPN: &[u8] = b"notes/sync/1";
+const SYNC_ALPN: &[u8] = b"y7/sync/2";
+const SYNC_ALPN_V1: &[u8] = b"notes/sync/1";
 const PAIR_ALPN: &[u8] = b"notes/pair/1";
+/// Phones check for this prefix, so it stays even though more than notes sync.
 const PAIR_PREFIX: &str = "notes-pair:1";
 const PAIRING_TTL: Duration = Duration::from_secs(10 * 60);
-const REDIAL_EVERY: Duration = Duration::from_secs(30);
+/// Unreachable paired devices are retried after this, backing off to
+/// `REDIAL_MAX` while nothing changes. Edits and incoming connections retry
+/// right away.
+const REDIAL_MIN: Duration = Duration::from_secs(30);
+const REDIAL_MAX: Duration = Duration::from_secs(15 * 60);
 const MAX_FRAME: usize = 64 << 20;
-
-/// Receives sync events. Called from background threads.
-pub trait Listener: Send + std::marker::Sync + 'static {
-    /// The notes changed because of another device.
-    fn notes_changed(&self);
-    /// Paired devices, their connection state, or pairing changed.
-    fn status_changed(&self);
-}
-
-#[derive(Clone, Debug)]
-pub struct PeerStatus {
-    pub id: String,
-    pub name: String,
-    pub connected: bool,
-    /// When notes were last exchanged with this device (Unix seconds).
-    pub last_sync: Option<i64>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct Status {
-    pub peers: Vec<PeerStatus>,
-    /// Shown as a QR code while this device is waiting to be paired.
-    pub pairing_code: Option<String>,
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Peer {
@@ -76,41 +71,67 @@ struct Pairing {
     code: Option<String>,
 }
 
-struct Shared {
-    notebook: Arc<Mutex<Notebook>>,
+pub(crate) struct Shared {
     dir: PathBuf,
     device_name: String,
     listener: Arc<dyn Listener>,
     router: watch::Sender<Option<Router>>,
+    /// Set once something needs the network (a peer, or pairing).
+    online: AtomicBool,
     peers: Mutex<Vec<Peer>>,
     live: Mutex<HashMap<EndpointId, Vec<Connection>>>,
     dialing: Mutex<HashSet<EndpointId>>,
     pairing: Mutex<Option<Pairing>>,
-    /// Bumped whenever the notebook changes, so open sessions send it on.
-    changes: watch::Sender<u64>,
+    docs: Mutex<BTreeMap<String, Arc<Mutex<Doc>>>>,
+    /// Bumped whenever any document changes, so open sessions send it on.
+    pub(crate) changes: watch::Sender<u64>,
     /// Makes the connector try paired devices right away.
     wake: Notify,
+    /// Behave like the first Notes release (`notes/sync/1` only), for tests.
+    v1_only: bool,
 }
 
-pub struct Sync {
-    shared: Arc<Shared>,
+/// The sync engine: identity, pairing, peers and documents, all in `dir`
+/// (`device.key`, `peers.json`, `<doc>.automerge`).
+pub struct Engine {
+    pub(crate) shared: Arc<Shared>,
     rt: tokio::runtime::Runtime,
 }
 
-impl Sync {
-    pub fn start(notebook: Arc<Mutex<Notebook>>, dir: PathBuf, device_name: String, listener: Arc<dyn Listener>) -> Self {
+impl Engine {
+    pub fn start(dir: PathBuf, device_name: String, listener: Arc<dyn Listener>) -> Self {
+        Self::start_with(dir, device_name, listener, false)
+    }
+
+    /// An engine that only speaks `notes/sync/1`, like phones running the
+    /// first Notes release. For compatibility tests.
+    #[doc(hidden)]
+    pub fn start_legacy(dir: PathBuf, device_name: String, listener: Arc<dyn Listener>) -> Self {
+        Self::start_with(dir, device_name, listener, true)
+    }
+
+    fn start_with(dir: PathBuf, device_name: String, listener: Arc<dyn Listener>, v1_only: bool) -> Self {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
-            .thread_name("notes-sync")
+            .thread_name("y7-sync")
             .enable_all()
             .build()
             .expect("tokio runtime");
-        let peers = std::fs::read(dir.join("peers.json"))
+        let peers: Vec<Peer> = std::fs::read(dir.join("peers.json"))
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
+        // Every saved document syncs with peers, even ones no app opened.
+        let mut docs = BTreeMap::new();
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
+            if path.extension().is_some_and(|e| e == "automerge") && valid_doc_id(&id) {
+                docs.insert(id, Arc::new(Mutex::new(Doc::open(path))));
+            }
+        }
         let shared = Arc::new(Shared {
-            notebook,
+            online: AtomicBool::new(!peers.is_empty()),
             dir,
             device_name,
             listener,
@@ -119,50 +140,104 @@ impl Sync {
             live: Mutex::default(),
             dialing: Mutex::default(),
             pairing: Mutex::default(),
+            docs: Mutex::new(docs),
             changes: watch::channel(0).0,
             wake: Notify::new(),
+            v1_only,
         });
         rt.spawn(run(shared.clone()));
-        Sync { shared, rt }
+        Engine { shared, rt }
     }
 
-    /// Call after every local edit; paired devices get it within a moment.
-    pub fn local_changed(&self) {
-        self.shared.changes.send_modify(|v| *v += 1);
-        self.shared.wake.notify_one();
+    pub(crate) fn runtime(&self) -> &tokio::runtime::Handle {
+        self.rt.handle()
+    }
+}
+
+impl Hub for Engine {
+    fn doc(&self, id: &str) -> Arc<Mutex<Doc>> {
+        self.shared.doc(id)
     }
 
-    /// Try to reach paired devices now (e.g. when the app comes to the front).
-    pub fn sync_now(&self) {
-        self.shared.wake.notify_one();
+    fn local_changed(&self, _id: &str) {
+        self.shared.local_changed();
     }
 
-    pub fn status(&self) -> Status {
-        let live = self.shared.live.lock().unwrap();
-        let peers = self.shared.peers.lock().unwrap();
-        let pairing = self.shared.pairing.lock().unwrap();
-        Status {
-            peers: peers
-                .iter()
-                .map(|p| PeerStatus {
-                    id: p.id.to_string(),
-                    name: p.name.clone(),
-                    connected: live.get(&p.id).is_some_and(|c| !c.is_empty()),
-                    last_sync: p.last_sync,
-                })
-                .collect(),
-            pairing_code: pairing.as_ref().filter(|p| p.expires > Instant::now()).and_then(|p| p.code.clone()),
+    fn status(&self) -> Status {
+        self.shared.status()
+    }
+
+    fn start_pairing(&self) {
+        self.shared.start_pairing(self.rt.handle());
+    }
+
+    fn cancel_pairing(&self) {
+        self.shared.cancel_pairing();
+    }
+
+    fn pair(&self, code: &str) -> Result<String> {
+        self.rt.block_on(self.shared.clone().pair(code.trim()))
+    }
+
+    fn unpair(&self, id: &str) {
+        self.shared.unpair(id);
+    }
+
+    fn sync_now(&self) {
+        self.shared.sync_now();
+    }
+
+    fn shutdown(&self) {
+        let router = self.shared.router.borrow().clone();
+        if let Some(router) = router {
+            let _ = self.rt.block_on(async { tokio::time::timeout(Duration::from_secs(1), router.shutdown()).await });
         }
     }
+}
 
-    /// Starts accepting one new device. The code to show appears in
-    /// `status().pairing_code` once the network is up (normally instantly).
-    pub fn start_pairing(&self) {
+impl Shared {
+    pub(crate) fn doc(&self, id: &str) -> Arc<Mutex<Doc>> {
+        let mut docs = self.docs.lock().unwrap();
+        docs.entry(id.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(Doc::open(self.dir.join(format!("{id}.automerge"))))))
+            .clone()
+    }
+
+    fn doc_ids(&self) -> Vec<String> {
+        self.docs.lock().unwrap().keys().cloned().collect()
+    }
+
+    pub(crate) fn local_changed(&self) {
+        self.changes.send_modify(|v| *v += 1);
+        self.wake.notify_one();
+    }
+
+    /// Applies a sync message to document `id`. Returns whether it changed.
+    pub(crate) fn receive(&self, id: &str, state: &mut sync::State, msg: sync::Message) -> Result<bool> {
+        let doc = self.doc(id);
+        let changed = {
+            let mut doc = doc.lock().unwrap();
+            let before = doc.heads();
+            doc.am().sync().receive_sync_message(state, msg)?;
+            let changed = doc.heads() != before;
+            if changed {
+                doc.save();
+            }
+            changed
+        };
+        if changed {
+            self.changes.send_modify(|v| *v += 1);
+            self.listener.doc_changed(id);
+        }
+        Ok(changed)
+    }
+
+    pub(crate) fn start_pairing(self: &Arc<Self>, rt: &tokio::runtime::Handle) {
         let token = data_encoding::HEXLOWER.encode(&rand::random::<[u8; 16]>());
-        *self.shared.pairing.lock().unwrap() =
+        *self.pairing.lock().unwrap() =
             Some(Pairing { token: token.clone(), expires: Instant::now() + PAIRING_TTL, code: None });
-        let shared = self.shared.clone();
-        self.rt.spawn(async move {
+        let shared = self.clone();
+        rt.spawn(async move {
             let ep = shared.endpoint().await;
             // Wait briefly for a relay, so the code also works off this network.
             let _ = tokio::time::timeout(Duration::from_secs(4), ep.online()).await;
@@ -177,38 +252,48 @@ impl Sync {
         });
     }
 
-    pub fn cancel_pairing(&self) {
-        *self.shared.pairing.lock().unwrap() = None;
-        self.shared.listener.status_changed();
+    pub(crate) fn cancel_pairing(&self) {
+        *self.pairing.lock().unwrap() = None;
+        self.listener.status_changed();
     }
 
-    /// Pairs with the device showing `code`. Blocks until done; returns the
-    /// other device's name.
-    pub fn pair(&self, code: &str) -> Result<String> {
-        self.rt.block_on(self.shared.clone().pair(code.trim()))
+    pub(crate) fn sync_now(&self) {
+        self.wake.notify_one();
     }
 
-    pub fn unpair(&self, id: &str) {
+    pub(crate) fn status(&self) -> Status {
+        let live = self.live.lock().unwrap();
+        let peers = self.peers.lock().unwrap();
+        let pairing = self.pairing.lock().unwrap();
+        Status {
+            peers: peers
+                .iter()
+                .map(|p| PeerStatus {
+                    id: p.id.to_string(),
+                    name: p.name.clone(),
+                    connected: live.get(&p.id).is_some_and(|c| !c.is_empty()),
+                    last_sync: p.last_sync,
+                })
+                .collect(),
+            pairing_code: pairing.as_ref().filter(|p| p.expires > Instant::now()).and_then(|p| p.code.clone()),
+        }
+    }
+
+    pub(crate) fn unpair(&self, id: &str) {
         let Ok(id) = id.parse::<EndpointId>() else { return };
-        self.shared.peers.lock().unwrap().retain(|p| p.id != id);
-        self.shared.save_peers();
-        for conn in self.shared.live.lock().unwrap().remove(&id).unwrap_or_default() {
+        self.peers.lock().unwrap().retain(|p| p.id != id);
+        self.save_peers();
+        for conn in self.live.lock().unwrap().remove(&id).unwrap_or_default() {
             conn.close(0u32.into(), b"unpaired");
         }
-        self.shared.listener.status_changed();
+        self.listener.status_changed();
     }
 
-    /// Closes connections so peers notice right away.
-    pub fn shutdown(&self) {
-        let router = self.shared.router.borrow().clone();
-        if let Some(router) = router {
-            let _ = self.rt.block_on(async { tokio::time::timeout(Duration::from_secs(1), router.shutdown()).await });
-        }
-    }
-}
-
-impl Shared {
+    /// The network endpoint, starting it if this is the first use.
     async fn endpoint(&self) -> Endpoint {
+        if !self.online.swap(true, Ordering::SeqCst) {
+            self.wake.notify_one();
+        }
         let mut rx = self.router.subscribe();
         let router = rx.wait_for(|r| r.is_some()).await.expect("sync stopped");
         router.as_ref().unwrap().endpoint().clone()
@@ -239,28 +324,29 @@ impl Shared {
         }
     }
 
-    async fn pair(self: Arc<Self>, code: &str) -> Result<String> {
+    pub(crate) async fn pair(self: Arc<Self>, code: &str) -> Result<String> {
         let parts: Vec<&str> = code.split(';').collect();
         let [PAIR_PREFIX, id, token, relay, ips] = parts[..] else {
-            bail!("That isn't a Notes pairing code.");
+            bail!("That isn't a pairing code.");
         };
-        let id: EndpointId = id.parse().context("That isn't a Notes pairing code.")?;
+        let id: EndpointId = id.parse().context("That isn't a pairing code.")?;
         let mut addrs: Vec<TransportAddr> =
             ips.split(',').filter_map(|a| a.parse().ok()).map(TransportAddr::Ip).collect();
         if let Ok(url) = relay.parse() {
             addrs.push(TransportAddr::Relay(url));
         }
         let ep = self.endpoint().await;
+        let unreachable = "Couldn't reach the other device. Is it on and showing this code?";
         let conn = tokio::time::timeout(Duration::from_secs(30), ep.connect(EndpointAddr::from_parts(id, addrs), PAIR_ALPN))
             .await
-            .context("Couldn't reach your computer. Is Notes open on it?")?
-            .context("Couldn't reach your computer. Is Notes open on it?")?;
+            .context(unreachable)?
+            .context(unreachable)?;
         let (mut send, mut recv) = conn.open_bi().await?;
         write_frame(&mut send, token.as_bytes()).await?;
         write_frame(&mut send, self.device_name.as_bytes()).await?;
         let reply = read_frame(&mut recv).await?;
         if reply != b"ok" {
-            bail!("This code has expired. Show a new one on your computer.");
+            bail!("This code has expired. Show a new one on the other device.");
         }
         let name = String::from_utf8_lossy(&read_frame(&mut recv).await?).into_owned();
         conn.close(0u32.into(), b"paired");
@@ -273,6 +359,7 @@ impl Shared {
     /// Exchanges changes with a paired device until the connection drops.
     async fn session(self: Arc<Self>, conn: Connection, initiator: bool) -> Result<()> {
         let peer = conn.remote_id();
+        let v2 = conn.alpn() == SYNC_ALPN;
         let (mut send, recv) = if initiator { conn.open_bi().await? } else { conn.accept_bi().await? };
         self.live.lock().unwrap().entry(peer).or_default().push(conn.clone());
         self.listener.status_changed();
@@ -289,32 +376,29 @@ impl Shared {
         });
 
         let mut changes = self.changes.subscribe();
-        let mut state = sync::State::new();
+        let mut states: HashMap<String, sync::State> = HashMap::new();
         let result: Result<()> = async {
             loop {
-                loop {
-                    let msg = self.notebook.lock().unwrap().doc().sync().generate_sync_message(&mut state);
-                    let Some(msg) = msg else { break };
-                    write_frame(&mut send, &msg.encode()).await?;
+                let ids = if v2 { self.doc_ids() } else { vec![NOTES_DOC.to_string()] };
+                for id in ids {
+                    let doc = self.doc(&id);
+                    let state = states.entry(id.clone()).or_insert_with(sync::State::new);
+                    loop {
+                        let msg = doc.lock().unwrap().am().sync().generate_sync_message(state);
+                        let Some(msg) = msg else { break };
+                        let frame = if v2 { tagged(&id, &msg.encode()) } else { msg.encode() };
+                        write_frame(&mut send, &frame).await?;
+                    }
                 }
                 tokio::select! {
                     frame = rx.recv() => {
                         let Some(frame) = frame else { return Ok(()) };
-                        let msg = sync::Message::decode(&frame)?;
-                        let changed = {
-                            let mut nb = self.notebook.lock().unwrap();
-                            let before = nb.heads();
-                            nb.doc().sync().receive_sync_message(&mut state, msg)?;
-                            let changed = nb.heads() != before;
-                            if changed {
-                                nb.save();
-                            }
-                            changed
-                        };
+                        let (id, msg) = if v2 { untag(&frame)? } else { (NOTES_DOC, frame.as_slice()) };
+                        let msg = sync::Message::decode(msg)?;
+                        let state = states.entry(id.to_string()).or_insert_with(sync::State::new);
+                        let changed = self.receive(id, state, msg)?;
                         self.mark_synced(&peer);
                         if changed {
-                            self.changes.send_modify(|v| *v += 1);
-                            self.listener.notes_changed();
                             self.listener.status_changed();
                         }
                     }
@@ -334,7 +418,13 @@ impl Shared {
     }
 
     async fn dial(self: Arc<Self>, ep: Endpoint, id: EndpointId) {
-        let conn = tokio::time::timeout(Duration::from_secs(20), ep.connect(id, SYNC_ALPN)).await;
+        // Offer both versions; the other side picks the newest it speaks.
+        let (alpn, more) = if self.v1_only { (SYNC_ALPN_V1, vec![]) } else { (SYNC_ALPN, vec![SYNC_ALPN_V1.to_vec()]) };
+        let opts = ConnectOptions::new().with_additional_alpns(more);
+        let conn = tokio::time::timeout(Duration::from_secs(20), async {
+            ep.connect_with_opts(id, alpn, opts).await?.await.map_err(anyhow::Error::from)
+        })
+        .await;
         self.dialing.lock().unwrap().remove(&id);
         match conn {
             Ok(Ok(conn)) => {
@@ -348,7 +438,27 @@ impl Shared {
     }
 }
 
+/// `[id length][id][payload]`, the version 2 frame.
+pub(crate) fn tagged(id: &str, payload: &[u8]) -> Vec<u8> {
+    let mut frame = Vec::with_capacity(1 + id.len() + payload.len());
+    frame.push(id.len() as u8);
+    frame.extend_from_slice(id.as_bytes());
+    frame.extend_from_slice(payload);
+    frame
+}
+
+pub(crate) fn untag(frame: &[u8]) -> Result<(&str, &[u8])> {
+    let n = *frame.first().context("empty frame")? as usize;
+    let id = frame.get(1..1 + n).and_then(|b| std::str::from_utf8(b).ok()).filter(|id| valid_doc_id(id));
+    let Some(id) = id else { bail!("bad document id") };
+    Ok((id, &frame[1 + n..]))
+}
+
 async fn run(shared: Arc<Shared>) {
+    // Stay off the network until something needs it.
+    while !shared.online.load(Ordering::SeqCst) {
+        shared.wake.notified().await;
+    }
     let key = load_or_create_key(&shared.dir);
     let ep = loop {
         let built = Endpoint::builder(presets::N0)
@@ -364,13 +474,18 @@ async fn run(shared: Arc<Shared>) {
             }
         }
     };
-    let router = Router::builder(ep.clone())
-        .accept(SYNC_ALPN, SyncHandler(shared.clone()))
+    let mut router = Router::builder(ep.clone());
+    if !shared.v1_only {
+        router = router.accept(SYNC_ALPN, SyncHandler(shared.clone()));
+    }
+    let router = router
+        .accept(SYNC_ALPN_V1, SyncHandler(shared.clone()))
         .accept(PAIR_ALPN, PairHandler(shared.clone()))
         .spawn();
     shared.router.send_replace(Some(router));
 
     // Keep trying paired devices that aren't connected.
+    let mut redial = REDIAL_MIN;
     loop {
         let peers: Vec<EndpointId> = shared.peers.lock().unwrap().iter().map(|p| p.id).collect();
         for id in peers {
@@ -380,8 +495,8 @@ async fn run(shared: Arc<Shared>) {
             }
         }
         tokio::select! {
-            _ = tokio::time::sleep(REDIAL_EVERY) => {}
-            _ = shared.wake.notified() => {}
+            _ = tokio::time::sleep(redial) => redial = (redial * 2).min(REDIAL_MAX),
+            _ = shared.wake.notified() => redial = REDIAL_MIN,
         }
     }
 }

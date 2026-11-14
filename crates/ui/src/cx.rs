@@ -122,6 +122,16 @@ impl Cx {
         self.scroll.insert(eid(id), 0.0);
     }
 
+    /// Scrolls container `id` so `y` (from its content's top) is at the top.
+    pub fn scroll_to(&mut self, id: impl Hash, y: f32) {
+        self.scroll.insert(eid(id), y.max(0.0));
+        self.redraw = true;
+    }
+
+    pub fn scroll_y(&self, id: impl Hash) -> f32 {
+        self.scroll_offset(eid(id))
+    }
+
     pub fn caret_visible(&self, input: &TextInput) -> bool {
         (Instant::now() - input.last_activity).as_millis() / CARET_BLINK_MS % 2 == 0
     }

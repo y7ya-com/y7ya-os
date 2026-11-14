@@ -34,6 +34,11 @@ pub trait App: Sized + 'static {
     fn on_wake(&mut self, _cx: &mut Cx) {}
     /// Another thread called [`Waker::wake`](super::cx::Waker::wake).
     fn on_external(&mut self, _cx: &mut Cx) {}
+    /// The mouse moved with the left button held (`cx.mouse` is where).
+    /// Call `cx.request_redraw()` if that changed anything.
+    fn on_drag(&mut self, _cx: &mut Cx) {}
+    /// The left button was released.
+    fn on_mouse_up(&mut self, _cx: &mut Cx) {}
     fn on_exit(&mut self) {}
 }
 
@@ -298,6 +303,9 @@ impl<A: App> Runner<A> {
     }
 
     fn mouse_up(&mut self) {
+        if let Some(app) = self.app.as_mut() {
+            app.on_mouse_up(&mut self.cx);
+        }
         let p = self.cx.mouse;
         if let (Some((f, b)), Some(app)) = (self.pressed_click.take(), self.app.as_mut()) {
             if b.contains(p) {
@@ -470,6 +478,8 @@ impl<A: App> ApplicationHandler for Runner<A> {
                     let local = Point { x: self.cx.mouse.x - b.x, y: self.cx.mouse.y - b.y };
                     state.borrow_mut().mouse_drag(&mut self.cx.text.fonts, local);
                     self.cx.redraw = true;
+                } else if let (true, Some(app)) = (self.cx.mouse_down, self.app.as_mut()) {
+                    app.on_drag(&mut self.cx);
                 }
                 self.update_hover();
             }

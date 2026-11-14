@@ -9,16 +9,21 @@ something changes.
 |---|---|
 | `desktop/` | **The desktop**: a Wayland compositor in Rust (Smithay) with Mac-style windows |
 | `apps/notes/` | **Notes** for the desktop, on our own GPU UI framework |
+| `apps/calendar/` | **Calendar**: day, week, month and year views, synced peer to peer |
+| `apps/reminders/` | **Reminders**: smart lists, subtasks, due dates, synced peer to peer |
 | `android/` | **Notes for Android** (Kotlin + Compose), synced peer to peer |
 | `crates/ui/` | The tiny GPUI-style UI framework every app is built on |
-| `crates/notes-core/` | Notebook (Automerge) + device-to-device sync (iroh) |
-| `crates/notes-ffi/` | The core, exposed to Kotlin via UniFFI |
+| `crates/y7-sync/` | Device-to-device sync for every app (Automerge + iroh) |
+| `crates/y7-syncd/` | The sync daemon: one identity and set of paired devices per computer |
+| `crates/sync-ui/` | The shared "Sync with Phone" row and pairing sheet |
+| `crates/*-core/` | Each app's document (notes, calendar, reminders) |
+| `crates/notes-ffi/` | The Notes core, exposed to Kotlin via UniFFI |
 
 **Roadmap:** Mission Control + spaces on a 3-finger swipe · app switcher · Spotlight ·
 notifications + Control Center · lock screen · Files · Calculator · Preview / Quick Look ·
-TextEdit · Screenshot · Clipboard history · Windows-style Task Manager · Calendar +
-Reminders (peer-to-peer synced) · FileDrop to Android · an AI helper (Claude or Codex)
-instead of a Settings app.
+TextEdit · Screenshot · Clipboard history · Windows-style Task Manager · Calendar and
+Reminders on Android · FileDrop to Android · an AI helper (Claude or Codex) instead
+of a Settings app.
 
 ## Desktop
 
@@ -59,14 +64,18 @@ Android app. The two sync directly with each other: no account, no server.
 - Folders, pinned notes, search, Recently Deleted (kept for 30 days), undo/redo,
   light and dark themes (follows the system).
 - **Syncs with your Android phone**, peer to peer and end-to-end encrypted (see below).
-- Notes autosave to `~/.local/share/notes/` (override with `NOTES_DATA_DIR`).
+- Notes autosave as they sync: the notebook lives with the sync daemon (see below).
 
 ## Build and install
 
 ```sh
-cargo build --release -p notes
-install -Dm755 target/release/notes ~/.local/bin/notes
-install -Dm644 apps/notes/notes.desktop ~/.local/share/applications/notes.desktop
+cargo build --release -p notes -p calendar -p reminders -p y7-syncd
+for app in notes calendar reminders; do
+    install -Dm755 target/release/$app ~/.local/bin/$app
+    install -Dm644 apps/$app/$app.desktop ~/.local/share/applications/$app.desktop
+done
+install -Dm755 target/release/y7-syncd ~/.local/bin/y7-syncd
+install -Dm644 crates/y7-syncd/y7-syncd.desktop ~/.config/autostart/y7-syncd.desktop
 ```
 
 Needs a GPU with Vulkan (falls back to OpenGL ES). Tested on KDE Plasma (Wayland).
@@ -89,9 +98,10 @@ Release builds are signed with the key in `android/keystore.properties` (see the
 
 ## Sync
 
-On the computer click **Sync with Phone** (bottom left) and scan the QR code from
-the phone app (**Sync with Computer**). After that the devices sync whenever both
-apps are open, usually within a fraction of a second.
+On the computer click **Sync with Phone** (bottom left in Notes, Calendar or
+Reminders) and scan the QR code from the phone app (**Sync with Computer**). Pairing
+is per computer, not per app: pair once and every app syncs. After that the devices
+sync whenever both are on, usually within a fraction of a second.
 
 - **No cloud.** Devices connect directly with [iroh](https://iroh.computer): on the
   same Wi-Fi via mDNS, otherwise via UDP hole punching. If no direct path exists,
@@ -105,9 +115,23 @@ apps are open, usually within a fraction of a second.
   a CRDT: edits made on both devices while apart, even to the same note, merge
   character by character.
 
-`crates/notes-core` holds the notebook and sync; `crates/notes-ffi` exposes it to
-Kotlin. `cargo run -p notes-core --example peer -- <dir>` runs a headless device
-for testing.
+- **One daemon, every app.** `y7-syncd` owns the device key, the paired devices and
+  all synced documents (`~/.local/share/y7-sync/`), and talks to one connection per
+  peer that carries every document (`notes`, `calendar`, `reminders`), each frame
+  tagged with its document id (`y7/sync/2`). Phones from before still speak
+  `notes/sync/1` and keep syncing notes. Apps keep an in-memory copy of their
+  document and sync it with the daemon over `$XDG_RUNTIME_DIR/y7-sync.sock` with the
+  same Automerge protocol. The daemon starts with your session
+  (`crates/y7-syncd/y7-syncd.{socket,service}` for systemd, or the autostart
+  `y7-syncd.desktop`), or on demand when an app needs it; with nothing paired it
+  doesn't touch the network at all. Its first start moves Notes' key, paired phone
+  and notebook over from `~/.local/share/notes/`.
+- `y7-syncd status` lists paired devices; `y7-syncd pair <code>` pairs with a
+  device showing a code (e.g. another computer).
+
+`crates/y7-sync` is the sync engine (the Android app runs it in-process through
+`crates/notes-ffi`); `crates/notes-core` is the notebook on top of it.
+`cargo run -p notes-core --example peer -- <dir>` runs a headless device for testing.
 
 ## Keyboard shortcuts
 

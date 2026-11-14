@@ -498,6 +498,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
+name = "calendar"
+version = "0.1.0"
+dependencies = [
+ "calendar-core",
+ "chrono",
+ "sync-ui",
+ "ui",
+ "y7-sync",
+]
+
+[[package]]
+name = "calendar-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "y7-sync",
+]
+
+[[package]]
 name = "calloop"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3018,26 +3037,20 @@ name = "notes"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "dirs",
  "notes-core",
- "qrcode",
+ "sync-ui",
  "ui",
+ "y7-sync",
 ]
 
 [[package]]
 name = "notes-core"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "automerge",
- "data-encoding",
- "iroh",
- "iroh-mdns-address-lookup",
- "rand 0.10.3",
  "serde",
  "serde_json",
- "tokio",
  "tracing",
+ "y7-sync",
 ]
 
 [[package]]
@@ -4035,6 +4048,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "reminders"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "reminders-core",
+ "sync-ui",
+ "ui",
+ "y7-sync",
+]
+
+[[package]]
+name = "reminders-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "y7-sync",
+]
+
+[[package]]
 name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4802,6 +4834,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "sync-ui"
+version = "0.1.0"
+dependencies = [
+ "qrcode",
+ "ui",
+ "y7-sync",
 ]
 
 [[package]]
@@ -6562,6 +6603,29 @@ dependencies = [
  "smithay",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "y7-sync"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "automerge",
+ "data-encoding",
+ "iroh",
+ "iroh-mdns-address-lookup",
+ "rand 0.10.3",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "y7-syncd"
+version = "0.1.0"
+dependencies = [
+ "y7-sync",
 ]
 
 [[package]]

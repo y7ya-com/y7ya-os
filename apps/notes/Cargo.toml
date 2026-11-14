@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 chrono = { workspace = true }
-dirs = { workspace = true }
 notes-core = { path = "../../crates/notes-core" }
-qrcode = { workspace = true }
+sync-ui = { path = "../../crates/sync-ui" }
 ui = { path = "../../crates/ui" }
+y7-sync = { path = "../../crates/y7-sync" }

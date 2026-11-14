@@ -1,0 +1,10 @@
+[package]
+name = "sync-ui"
+version = "0.1.0"
+edition = "2024"
+description = "The \"Sync with Phone\" row and pairing sheet shared by y7ya-os apps"
+
+[dependencies]
+qrcode = { workspace = true }
+ui = { path = "../ui" }
+y7-sync = { path = "../y7-sync" }

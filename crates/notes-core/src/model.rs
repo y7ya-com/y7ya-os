@@ -41,18 +41,9 @@ impl Note {
     }
 }
 
-/// A fresh id that won't collide with ones made on other devices. Ids stay
-/// below 2^53 so they survive any language's number type.
-pub fn new_id() -> u64 {
-    loop {
-        let id = rand::random::<u64>() >> 11;
-        if id != DEFAULT_FOLDER {
-            return id;
-        }
-    }
-}
+/// A fresh id that won't collide with ones made on other devices (never
+/// [`DEFAULT_FOLDER`]).
+pub use y7_sync::new_id;
 
 /// Seconds since the Unix epoch.
-pub fn now() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
-}
+pub use y7_sync::now;

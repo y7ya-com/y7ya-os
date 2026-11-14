@@ -1,0 +1,9 @@
+[Unit]
+Description=y7ya-os sync daemon socket
+
+[Socket]
+ListenStream=%t/y7-sync.sock
+SocketMode=0600
+
+[Install]
+WantedBy=sockets.target

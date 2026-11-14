@@ -1,0 +1,8 @@
+[package]
+name = "y7-syncd"
+version = "0.1.0"
+edition = "2024"
+description = "The y7ya-os sync daemon: one device identity and peer list for every app"
+
+[dependencies]
+y7-sync = { path = "../y7-sync" }

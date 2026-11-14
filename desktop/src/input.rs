@@ -10,6 +10,7 @@ use smithay::backend::input::{
 use smithay::input::keyboard::{FilterResult, Keycode, keysyms};
 use smithay::input::pointer::{AxisFrame, ButtonEvent, Focus, GrabStartData, MotionEvent};
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
+use smithay::wayland::shell::wlr_layer::Layer;
 
 use crate::grabs::{MoveGrab, ResizeGrab};
 use crate::state::{Button, Desk, Hit};
@@ -255,6 +256,8 @@ impl Desk {
                         pointer.set_grab(self, ResizeGrab::start(start_data, window, edges, initial), serial, Focus::Clear);
                     }
                 }
+                // Clicking the menu bar or a panel leaves the active window be.
+                None if self.layer_under(&[Layer::Overlay, Layer::Top], pos).is_some() => {}
                 None => {
                     let window = self.space.element_under(pos).map(|(w, _)| w.clone());
                     if window != self.focused_window() || window.is_none() {

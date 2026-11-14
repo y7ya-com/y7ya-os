@@ -42,17 +42,26 @@ pub struct Cx {
     pub(crate) commands: Vec<WindowCommand>,
     pub(crate) redraw: bool,
     pub(crate) waker: Waker,
+    /// Layer-shell surfaces (see `layer.rs`).
+    pub(crate) layers: crate::layer::LayerCx,
     scroll: HashMap<ElementId, f32>,
 }
 
 /// Wakes the UI thread from another thread; the app's `on_external` runs.
+/// The second slot is used by the layer-shell runner.
 #[derive(Clone, Default)]
-pub struct Waker(pub(crate) Option<winit::event_loop::EventLoopProxy<()>>);
+pub struct Waker(
+    pub(crate) Option<winit::event_loop::EventLoopProxy<()>>,
+    pub(crate) Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+);
 
 impl Waker {
     pub fn wake(&self) {
         if let Some(proxy) = &self.0 {
             let _ = proxy.send_event(());
+        }
+        if let Some(wake) = &self.1 {
+            wake();
         }
     }
 }
@@ -78,6 +87,7 @@ impl Cx {
             commands: Vec::new(),
             redraw: false,
             waker: Waker::default(),
+            layers: Default::default(),
             scroll: HashMap::new(),
         }
     }

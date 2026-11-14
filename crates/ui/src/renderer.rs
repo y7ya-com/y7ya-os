@@ -15,10 +15,10 @@ struct Globals {
 }
 
 pub struct Renderer {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    pub(crate) device: wgpu::Device,
+    pub(crate) queue: wgpu::Queue,
     surface: Option<(wgpu::Surface<'static>, wgpu::SurfaceConfiguration)>,
-    format: wgpu::TextureFormat,
+    pub(crate) format: wgpu::TextureFormat,
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
     globals: wgpu::Buffer,
@@ -94,7 +94,7 @@ impl Renderer {
         Self::build(device, queue, wgpu::TextureFormat::Rgba8Unorm, None, false)
     }
 
-    fn build(
+    pub(crate) fn build(
         device: wgpu::Device,
         queue: wgpu::Queue,
         format: wgpu::TextureFormat,
@@ -326,7 +326,7 @@ impl Renderer {
         enc.write_header().and_then(|mut wr| wr.write_image_data(&pixels)).expect("write png");
     }
 
-    fn encode(
+    pub(crate) fn encode(
         &mut self,
         scene: &Scene,
         view: &wgpu::TextureView,

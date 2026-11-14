@@ -161,7 +161,7 @@ impl Desk {
 
         Desk {
             start: Instant::now(),
-            display_handle: dh,
+            display_handle: dh.clone(),
             loop_handle,
             loop_signal,
             socket_name,

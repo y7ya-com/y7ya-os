@@ -1,0 +1,237 @@
+//! Menu-bar and Control Center glyphs, drawn with rounded strokes in the
+//! SF Symbols spirit. Each centers itself in the given bounds.
+
+use ui::{Bounds, Color, Scene, pt};
+
+pub fn arc(scene: &mut Scene, cx: f32, cy: f32, r: f32, from_deg: f32, to_deg: f32, color: Color, stroke: f32) {
+    let steps = ((to_deg - from_deg).abs() / 12.0).ceil().max(3.0) as usize;
+    let mut prev = None;
+    for i in 0..=steps {
+        let a = (from_deg + (to_deg - from_deg) * i as f32 / steps as f32).to_radians();
+        let p = pt(cx + r * a.cos(), cy + r * a.sin());
+        if let Some(q) = prev {
+            scene.segment(q, p, stroke, color);
+        }
+        prev = Some(p);
+    }
+}
+
+fn outline(scene: &mut Scene, b: Bounds, r: f32, color: Color, stroke: f32) {
+    scene.rect_bordered(b, Color::TRANSPARENT, r, color, stroke);
+}
+
+/// The y7ya-os mark: a monoline "y" whose tail sweeps under it, in a soft
+/// rounded square's footprint.
+pub fn logo(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    let s = b.w.min(b.h) / 16.0;
+    let w = 1.9 * s;
+    // Short arm, long arm, and the tail curling left.
+    scene.segment(pt(c.x - 4.6 * s, c.y - 5.2 * s), pt(c.x - 0.4 * s, c.y + 1.4 * s), w, color);
+    scene.segment(pt(c.x + 4.6 * s, c.y - 5.2 * s), pt(c.x - 1.0 * s, c.y + 4.6 * s), w, color);
+    arc(scene, c.x - 3.0 * s, c.y + 3.4 * s, 2.3 * s, 30.0, 150.0, color, w);
+    // The dot that makes it ours.
+    scene.rect(Bounds::new(c.x + 3.0 * s, c.y + 3.0 * s, 2.6 * s, 2.6 * s), color, 1.3 * s);
+}
+
+/// Wi-Fi fan: lit arcs for `strength` (0–100); a slashed fan when off.
+pub fn wifi(scene: &mut Scene, b: Bounds, color: Color, dim: Color, strength: u8, on: bool) {
+    let c = b.center();
+    let base = pt(c.x, c.y + 5.0);
+    let bars = match strength {
+        0..=25 => 1,
+        26..=50 => 2,
+        _ => 3,
+    };
+    scene.rect(Bounds::new(base.x - 1.4, base.y - 1.4, 2.8, 2.8), if on { color } else { dim }, 1.4);
+    for i in 1..=3 {
+        let lit = on && i <= bars;
+        arc(scene, base.x, base.y, 3.4 * i as f32, -135.0, -45.0, if lit { color } else { dim }, 1.6);
+    }
+    if !on {
+        scene.segment(pt(c.x - 6.5, c.y - 5.5), pt(c.x + 6.5, c.y + 6.0), 1.4, color);
+    }
+}
+
+pub fn battery(scene: &mut Scene, b: Bounds, color: Color, fill: Color, percent: u8, charging: bool) {
+    let c = b.center();
+    let (w, h) = (23.0, 11.5);
+    let body = Bounds::new(c.x - w / 2.0 - 1.0, c.y - h / 2.0, w, h);
+    outline(scene, body, 3.2, color.alpha(0.45), 1.0);
+    scene.rect(Bounds::new(body.right() + 0.8, c.y - 2.0, 1.6, 4.0), color.alpha(0.45), 0.8);
+    let inner = body.inset(2.0);
+    let level = (percent as f32 / 100.0).clamp(0.08, 1.0);
+    scene.rect(Bounds::new(inner.x, inner.y, inner.w * level, inner.h), fill, 1.6);
+    if charging {
+        let (top, mid, tail, bottom) =
+            (pt(c.x + 0.4, c.y - 4.6), pt(c.x - 2.6, c.y + 0.6), pt(c.x + 2.0, c.y - 0.6), pt(c.x - 1.0, c.y + 4.6));
+        scene.segment(top, mid, 1.4, color);
+        scene.segment(mid, tail, 1.4, color);
+        scene.segment(tail, bottom, 1.4, color);
+    }
+}
+
+/// Speaker with 0–3 waves by level, or a slash when muted.
+pub fn speaker(scene: &mut Scene, b: Bounds, color: Color, level: f32, muted: bool) {
+    let c = b.center();
+    let x = c.x - 6.0;
+    scene.rect(Bounds::new(x, c.y - 2.4, 3.2, 4.8), color, 0.8);
+    // The cone, filled with strokes.
+    for i in 0..=4 {
+        let t = i as f32 / 4.0;
+        let top = pt(x + 3.0 + 3.6 * t, c.y - 2.4 - 3.0 * t);
+        scene.segment(top, pt(top.x, c.y + 2.4 + 3.0 * t), 1.3, color);
+    }
+    if muted {
+        scene.segment(pt(c.x + 3.0, c.y - 2.5), pt(c.x + 8.0, c.y + 2.5), 1.4, color);
+        scene.segment(pt(c.x + 3.0, c.y + 2.5), pt(c.x + 8.0, c.y - 2.5), 1.4, color);
+        return;
+    }
+    let waves = if level <= 0.0 { 0 } else if level < 0.34 { 1 } else if level < 0.67 { 2 } else { 3 };
+    for i in 1..=3 {
+        let col = if i <= waves { color } else { color.alpha(0.3) };
+        arc(scene, c.x + 0.5, c.y, 2.2 + 2.6 * i as f32, -45.0, 45.0, col, 1.4);
+    }
+}
+
+/// Control Center: two switches.
+pub fn control_center(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    for (dy, knob_left) in [(-3.3, false), (3.3, true)] {
+        let pill = Bounds::new(c.x - 7.5, c.y + dy - 2.9, 15.0, 5.8);
+        outline(scene, pill, 2.9, color, 1.3);
+        let kx = if knob_left { pill.x + 0.6 } else { pill.right() - 5.2 };
+        scene.rect(Bounds::new(kx, pill.y + 0.6, 4.6, 4.6), color, 2.3);
+    }
+}
+
+pub fn magnifier(scene: &mut Scene, b: Bounds, color: Color, size: f32) {
+    let c = b.center();
+    let s = size / 16.0;
+    let r = 5.2 * s;
+    let o = pt(c.x - 1.4 * s, c.y - 1.4 * s);
+    scene.rect_bordered(Bounds::new(o.x - r, o.y - r, 2.0 * r, 2.0 * r), Color::TRANSPARENT, r, color, 1.6 * s.max(1.0));
+    scene.segment(pt(o.x + r * 0.72, o.y + r * 0.72), pt(c.x + 6.4 * s, c.y + 6.4 * s), 2.0 * s.max(0.9), color);
+}
+
+pub fn bluetooth(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    let (top, bot) = (pt(c.x, c.y - 7.0), pt(c.x, c.y + 7.0));
+    let w = 1.5;
+    scene.segment(top, bot, w, color);
+    scene.segment(top, pt(c.x + 4.0, c.y - 3.5), w, color);
+    scene.segment(pt(c.x + 4.0, c.y - 3.5), pt(c.x - 4.0, c.y + 3.5), w, color);
+    scene.segment(bot, pt(c.x + 4.0, c.y + 3.5), w, color);
+    scene.segment(pt(c.x + 4.0, c.y + 3.5), pt(c.x - 4.0, c.y - 3.5), w, color);
+}
+
+/// Focus / Do Not Disturb: a crescent moon, thick on the left and tapering.
+pub fn moon(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    let steps = 14;
+    for i in 0..steps {
+        let t0 = i as f32 / steps as f32;
+        let t1 = (i + 1) as f32 / steps as f32;
+        let angle = |t: f32| (60.0 + 240.0 * t).to_radians();
+        // Widest at the middle of the sweep (the moon's back).
+        let width = 1.2 + 3.4 * (std::f32::consts::PI * (t0 + t1) / 2.0).sin();
+        let r = 5.2;
+        let p = |a: f32| pt(c.x + 0.8 + r * a.cos(), c.y + r * a.sin());
+        scene.segment(p(angle(t0)), p(angle(t1)), width, color);
+    }
+}
+
+/// Dark Mode: a half-filled circle.
+pub fn appearance(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    let r = 6.5;
+    scene.rect_bordered(Bounds::new(c.x - r, c.y - r, 2.0 * r, 2.0 * r), Color::TRANSPARENT, r, color, 1.5);
+    // The right half, filled with vertical strokes.
+    let steps = 8;
+    for i in 0..steps {
+        let x = (i as f32 + 0.5) / steps as f32 * (r - 0.5);
+        let h = ((r - 0.5) * (r - 0.5) - x * x).max(0.0).sqrt();
+        scene.segment(pt(c.x + x, c.y - h), pt(c.x + x, c.y + h), (r - 0.5) / steps as f32 + 0.3, color);
+    }
+}
+
+pub fn sun(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    scene.rect(Bounds::new(c.x - 3.2, c.y - 3.2, 6.4, 6.4), color, 3.2);
+    for i in 0..8 {
+        let a = (i as f32 * 45.0).to_radians();
+        scene.segment(pt(c.x + 5.4 * a.cos(), c.y + 5.4 * a.sin()), pt(c.x + 7.0 * a.cos(), c.y + 7.0 * a.sin()), 1.4, color);
+    }
+}
+
+pub fn play(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    for i in 0..=6 {
+        let t = i as f32 / 6.0;
+        let x = c.x - 4.0 + 9.0 * t;
+        let half = 5.5 * (1.0 - t);
+        scene.segment(pt(x, c.y - half), pt(x, c.y + half), 1.8, color);
+    }
+}
+
+pub fn pause(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    for dx in [-2.8, 2.8] {
+        scene.segment(pt(c.x + dx, c.y - 5.5), pt(c.x + dx, c.y + 5.5), 2.6, color);
+    }
+}
+
+/// Two triangles: forward when `forward`, else back.
+pub fn skip(scene: &mut Scene, b: Bounds, color: Color, forward: bool) {
+    let c = b.center();
+    let dir = if forward { 1.0 } else { -1.0 };
+    for off in [-4.5, 1.5] {
+        for i in 0..=5 {
+            let t = i as f32 / 5.0;
+            let x = c.x + dir * (off + 6.0 * t) - if forward { 0.0 } else { 3.0 * dir };
+            let half = 4.5 * (1.0 - t);
+            scene.segment(pt(x, c.y - half), pt(x, c.y + half), 1.6, color);
+        }
+    }
+}
+
+pub fn xmark(scene: &mut Scene, b: Bounds, color: Color, size: f32, stroke: f32) {
+    let c = b.center();
+    let h = size / 2.0;
+    scene.segment(pt(c.x - h, c.y - h), pt(c.x + h, c.y + h), stroke, color);
+    scene.segment(pt(c.x - h, c.y + h), pt(c.x + h, c.y - h), stroke, color);
+}
+
+pub fn document(scene: &mut Scene, b: Bounds, color: Color, paper: Color) {
+    let c = b.center();
+    let body = Bounds::new(c.x - 7.5, c.y - 10.0, 15.0, 20.0);
+    scene.rect_bordered(body, paper, 2.5, color, 1.0);
+    for i in 0..4 {
+        let y = body.y + 6.0 + i as f32 * 3.2;
+        scene.segment(pt(body.x + 3.5, y), pt(body.right() - 3.5 - if i == 3 { 4.0 } else { 0.0 }, y), 1.0, color.alpha(0.6));
+    }
+}
+
+pub fn folder(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    scene.rect(Bounds::new(c.x - 11.0, c.y - 8.0, 9.0, 5.0), color.alpha(0.85), 2.0);
+    scene.rect(Bounds::new(c.x - 11.0, c.y - 5.5, 22.0, 14.5), color, 2.5);
+}
+
+/// "=" on a tile: the calculator result.
+pub fn equals(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    for dy in [-2.6, 2.6] {
+        scene.segment(pt(c.x - 5.5, c.y + dy), pt(c.x + 5.5, c.y + dy), 2.2, color);
+    }
+}
+
+pub fn arrows(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    for (y, dir) in [(c.y - 3.0, 1.0), (c.y + 3.0, -1.0)] {
+        scene.segment(pt(c.x - 6.0, y), pt(c.x + 6.0, y), 1.8, color);
+        let tip = pt(c.x + 6.0 * dir, y);
+        scene.segment(tip, pt(tip.x - 3.0 * dir, y - 3.0), 1.8, color);
+        scene.segment(tip, pt(tip.x - 3.0 * dir, y + 3.0), 1.8, color);
+    }
+}

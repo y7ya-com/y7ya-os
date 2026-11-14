@@ -103,7 +103,7 @@ pub fn run<A: App>(opts: WindowOptions, make: impl FnOnce(&mut Cx) -> A + 'stati
         last_click: (Instant::now() - Duration::from_secs(10), Point::default(), 0),
         cursor: CursorIcon::Default,
     };
-    runner.cx.waker = super::cx::Waker(Some(event_loop.create_proxy()));
+    runner.cx.waker = super::cx::Waker(Some(event_loop.create_proxy()), None);
     event_loop.run_app(&mut runner).expect("run app");
 }
 
@@ -552,6 +552,9 @@ impl<A: App> ApplicationHandler for Runner<A> {
                     let local = Point { x: self.cx.mouse.x - b.x, y: self.cx.mouse.y - b.y };
                     w.borrow_mut().mouse_drag(local, &mut self.cx);
                     self.cx.redraw = true;
+                }
+                if let Some(app) = self.app.as_mut() {
+                    app.on_mouse_move(&mut self.cx);
                 }
                 self.update_hover();
                 if let Some(app) = self.app.as_mut() {

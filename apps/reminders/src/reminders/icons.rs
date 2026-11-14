@@ -99,7 +99,7 @@ pub fn check(scene: &mut Scene, b: Bounds, color: Color, stroke: f32) {
 
 /// My Lists' glyph: three bulleted lines.
 pub fn bullets(scene: &mut Scene, b: Bounds, color: Color) {
-    let (x, y, s) = frame(b, 18.0);
+    let (x, y, s) = frame(b, b.w.min(b.h) * 18.0 / 14.0);
     for i in 0..3 {
         let yy = y + (5.0 + i as f32 * 4.0) * s;
         circle(scene, x + 4.5 * s, yy, 1.2 * s, color);

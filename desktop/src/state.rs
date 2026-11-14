@@ -103,6 +103,8 @@ pub struct Desk {
     pub pressed: Option<(Window, Button)>,
     pub last_title_click: Option<(Window, Instant)>,
     pub needs_redraw: bool,
+    /// The X11 display served by xwayland-satellite, for X11-only apps.
+    pub x_display: Option<String>,
 }
 
 impl Desk {
@@ -175,6 +177,7 @@ impl Desk {
             pressed: None,
             last_title_click: None,
             needs_redraw: true,
+            x_display: None,
         }
     }
 
@@ -396,6 +399,26 @@ impl Desk {
         self.space.map_element(window.clone(), loc, true);
     }
 
+    /// Starts xwayland-satellite (if installed) so X11-only apps can run.
+    pub fn start_xwayland(&mut self) {
+        let found = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("xwayland-satellite").exists()));
+        if !found {
+            return;
+        }
+        // The first X display number nobody is using.
+        let Some(n) = (1..64).find(|n| !std::path::Path::new(&format!("/tmp/.X11-unix/X{n}")).exists()) else { return };
+        let display = format!(":{n}");
+        let started = std::process::Command::new("xwayland-satellite")
+            .arg(&display)
+            .env("WAYLAND_DISPLAY", &self.socket_name)
+            .env_remove("DISPLAY")
+            .spawn();
+        match started {
+            Ok(_) => self.x_display = Some(display),
+            Err(e) => tracing::warn!("couldn't start xwayland-satellite: {e}"),
+        }
+    }
+
     /// Runs `cmd` as a client of this desktop.
     pub fn spawn(&self, cmd: &str) {
         let mut parts = cmd.split_whitespace();
@@ -410,6 +433,7 @@ impl Desk {
             .args(parts)
             .env("WAYLAND_DISPLAY", &self.socket_name)
             .env_remove("DISPLAY")
+            .envs(self.x_display.iter().map(|d| ("DISPLAY", d.as_str())))
             .env("XDG_SESSION_TYPE", "wayland")
             .env("XDG_CURRENT_DESKTOP", "y7ya-os")
             .env("QT_QPA_PLATFORM", "wayland")

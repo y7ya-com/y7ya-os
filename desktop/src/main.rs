@@ -46,6 +46,7 @@ fn main() -> anyhow::Result<()> {
         after = Some(backend::winit::init(&mut event_loop, &mut desk)?);
     }
     println!("WAYLAND_DISPLAY={}", desk.socket_name.to_string_lossy());
+    desk.start_xwayland();
     if let Some(cmd) = value("-c") {
         desk.spawn(&cmd);
     }

@@ -474,7 +474,7 @@ impl TextInput {
         let mut caret = None;
         self.editor.with_buffer(|b| {
             for run in b.layout_runs() {
-                if let Some((start, end)) = selection {
+                if let Some((start, end)) = selection.filter(|(s, e)| (s.line..=e.line).contains(&run.line_i)) {
                     let mut any = false;
                     for (x, w) in run.highlight(start, end) {
                         any = true;

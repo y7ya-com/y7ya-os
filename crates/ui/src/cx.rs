@@ -13,6 +13,7 @@ pub(crate) enum WindowCommand {
     Close,
     Minimize,
     ToggleMaximize,
+    Resize(f32, f32),
 }
 
 /// Window-wide state shared with the app during render and event handling.
@@ -145,5 +146,10 @@ impl Cx {
 
     pub fn toggle_maximize(&mut self) {
         self.commands.push(WindowCommand::ToggleMaximize);
+    }
+
+    /// Asks for a new logical window size (e.g. Calculator switching modes).
+    pub fn resize_window(&mut self, w: f32, h: f32) {
+        self.commands.push(WindowCommand::Resize(w, h));
     }
 }

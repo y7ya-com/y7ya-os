@@ -107,7 +107,7 @@ impl FilesApp {
     }
 
     fn dragging_over(&self, id: ElementId, cx: &Cx) -> bool {
-        self.drag.is_some() && cx.is_hovered(id)
+        self.drag.is_some() && cx.hovered(id)
     }
 
     // -- sidebar --------------------------------------------------------------

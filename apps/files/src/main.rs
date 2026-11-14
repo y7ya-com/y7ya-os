@@ -13,7 +13,7 @@ fn main() {
 
     // `files --snapshot out.png --root <fixture home> [--light] [--view icons|list|columns]
     //  [--dir <sub/dir>] [--column-root <sub/dir>] [--select a,b] [--quicklook]
-    //  [--menu] [--trash] [--empty-trash] [--search text] [--size WxH]`
+    //  [--menu] [--trash] [--recents] [--empty-trash] [--search text] [--size WxH]`
     // renders offscreen, treating the fixture as the home folder.
     if let Some(out) = flag("--snapshot") {
         let root = PathBuf::from(flag("--root").expect("--snapshot needs --root <fixture home>"));
@@ -31,6 +31,9 @@ fn main() {
         ui::snapshot(size, 2.0, dark, &PathBuf::from(out), |cx| FilesApp::new(places, opts, cx), |app, cx| {
             if has("--trash") {
                 app.show_location(Location::Trash, cx);
+            }
+            if has("--recents") {
+                app.show_location(Location::Recents, cx);
             }
             if let Some(r) = flag("--column-root") {
                 app.set_column_root(root.join(r));

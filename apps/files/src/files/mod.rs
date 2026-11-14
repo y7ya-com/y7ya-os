@@ -204,6 +204,7 @@ pub struct FilesApp {
     press: Option<Press>,
     drag: Option<Drag>,
     band: Option<Band>,
+    /// Drop targets by the key given to their `.id()` (look up with `cx.hovered`).
     drop_targets: Vec<(ElementId, DropTarget)>,
     /// The content area's bounds as last laid out (for virtualized views).
     content_bounds: Rc<Cell<Bounds>>,
@@ -1383,7 +1384,7 @@ impl App for FilesApp {
     fn on_mouse_up(&mut self, cx: &mut Cx) {
         let press = self.press.take();
         if let Some(drag) = self.drag.take() {
-            let target = self.drop_targets.iter().find(|(id, _)| cx.is_hovered(*id)).map(|(_, t)| t.clone());
+            let target = self.drop_targets.iter().find(|(id, _)| cx.hovered(*id)).map(|(_, t)| t.clone());
             if let Some(t) = target {
                 self.drop_on(t, drag.paths, cx.modifiers.control_key());
             }
@@ -1444,9 +1445,12 @@ impl FilesApp {
         if self.renaming.is_some() {
             if key.is_named(NamedKey::Enter) {
                 self.finish_rename(true, cx);
-                return true;
+            } else {
+                // Typed straight into the field: it may not be on screen yet
+                // when typing starts right after New Folder.
+                self.rename.borrow_mut().handle_key(&mut cx.text.fonts, key, &mut cx.clipboard);
             }
-            return false;
+            return true;
         }
         if cx.is_focused("search") {
             if key.is_named(NamedKey::Enter) || key.is_named(NamedKey::ArrowDown) {

@@ -86,3 +86,95 @@ fn precomputed_ids_are_not_rehashed() {
     assert!(c.is_focused(("row", 7)));
 }
 
+fn key(k: winit::keyboard::Key, ctrl: bool, shift: bool) -> crate::KeyPress {
+    crate::KeyPress { key: k, text: None, ctrl, shift, alt: false }
+}
+
+#[test]
+fn text_editing_selects_like_a_mac() {
+    use winit::keyboard::{Key, NamedKey};
+    let mut c = cx(400.0, 200.0);
+    let fonts = &mut c.text.fonts;
+    let mut t = crate::TextInput::new(fonts, TextStyle::default(), false);
+    t.set_text(fonts, "hello brave world\nsecond line here");
+    t.measure(fonts, Some(400.0));
+
+    // Double-click a word (over "brave"), triple-click a line.
+    t.mouse_down(fonts, Point { x: 50.0, y: 5.0 }, 2, false);
+    assert_eq!(t.selected_text().as_deref(), Some("brave"));
+    t.mouse_down(fonts, Point { x: 50.0, y: 5.0 }, 3, false);
+    assert_eq!(t.selected_text().as_deref().map(str::trim_end), Some("hello brave world"));
+
+    // Ctrl+A, then Shift+arrows from a plain caret.
+    t.handle_key(fonts, &key(Key::Character("a".into()), true, false), &mut None);
+    assert_eq!(t.selected_text().as_deref(), Some("hello brave world\nsecond line here"));
+    t.handle_key(fonts, &key(Key::Named(NamedKey::Home), true, false), &mut None);
+    for _ in 0..5 {
+        t.handle_key(fonts, &key(Key::Named(NamedKey::ArrowRight), false, true), &mut None);
+    }
+    assert_eq!(t.selected_text().as_deref(), Some("hello"));
+    t.handle_key(fonts, &key(Key::Named(NamedKey::ArrowRight), true, true), &mut None);
+    assert_eq!(t.selected_text().as_deref().map(str::trim_end), Some("hello brave"));
+
+    // One-line fields jump to their ends with Up and Down.
+    let mut f = crate::TextInput::new(fonts, TextStyle::default(), true);
+    f.set_text(fonts, "search me");
+    f.handle_key(fonts, &key(Key::Named(NamedKey::ArrowDown), false, true), &mut None);
+    assert_eq!(f.selected_text().as_deref(), Some("search me"));
+}
+
+struct Rows;
+
+impl crate::App for Rows {
+    fn render(&mut self, cx: &mut Cx) -> Div<Self> {
+        let rows = (0..60).map(|i| div().h(24.0).px(12.0).child(text(format!("Row {i}"))));
+        let list = div().id("rows").scroll_y().flex_1().flex_col().children(rows);
+        let (w, h) = cx.window_size;
+        div().w(w).h(h).bg(if cx.dark { crate::rgb(0x1e1e1e) } else { Color::WHITE }).flex_col().child(list)
+    }
+    fn base_text_style(&self, cx: &Cx) -> TextStyle {
+        TextStyle { color: if cx.dark { Color::WHITE } else { Color::BLACK }, ..TextStyle::default() }
+    }
+}
+
+#[test]
+fn scrolling_shows_an_overlay_scrollbar() {
+    use std::time::Instant;
+    let mut c = cx(300.0, 400.0);
+    let mut app = Rows;
+    let paint = |app: &mut Rows, c: &mut Cx| {
+        let mut scene = Scene::default();
+        let root = AnyElement::Div(crate::App::render(app, c));
+        render_tree(&root, c, &mut scene, TextStyle::default());
+        scene
+    };
+    let knob = |scene: &Scene| scene.instances().any(|i| i.params[3] == 0.0 && i.rect[0] > 280.0 && i.rect[2] <= 10.0);
+    let idle = paint(&mut app, &mut c);
+    assert!(!knob(&idle), "no scrollbar before scrolling");
+    c.scroll_region(eid("rows"), -200.0, crate::kinetic::Phase::Wheel, Instant::now());
+    let scrolled = paint(&mut app, &mut c);
+    assert!(knob(&scrolled), "scrollbar while scrolling");
+    assert_eq!(c.scroll_y("rows"), 200.0);
+
+    // For eyeballing: UI_TEST_PNG=/tmp/x.png cargo test -p ui scrolling_shows
+    if let Some(path) = std::env::var_os("UI_TEST_PNG") {
+        crate::snapshot((300.0, 400.0), 2.0, false, std::path::Path::new(&path), |_| Rows, |_, c| {
+            c.note_region(eid("rows"), Bounds::new(0.0, 0.0, 300.0, 400.0), 1440.0, 1040.0);
+            c.scroll_region(eid("rows"), -300.0, crate::kinetic::Phase::Touch, Instant::now());
+            c.scroll_region(eid("rows"), 400.0, crate::kinetic::Phase::Touch, Instant::now());
+        });
+    }
+}
+
+#[test]
+fn caret_blinks_only_in_an_active_window() {
+    use std::time::{Duration, Instant};
+    let mut c = cx(100.0, 100.0);
+    let now = Instant::now();
+    assert!(c.caret_on(now), "solid right after typing");
+    // Long idle: stays on (no more blinking wake-ups).
+    assert!(c.caret_on(now - crate::cx::CARET_BLINK_FOR - Duration::from_secs(1)));
+    c.window_focused = false;
+    assert!(!c.caret_on(now), "hidden while the window is inactive");
+}
+

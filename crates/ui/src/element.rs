@@ -590,6 +590,15 @@ fn build<S>(el: &AnyElement<S>, tree: &mut TaffyTree<Measure>, inherited: TextSt
         AnyElement::Div(d) => {
             let style = d.text.apply(inherited);
             let children: Vec<NodeId> = d.children.iter().map(|c| build(c, tree, style)).collect();
+            if d.scroll {
+                // Rows in a scrolling list keep their height instead of
+                // squeezing to fit the viewport.
+                for &c in &children {
+                    let mut s = tree.style(c).unwrap().clone();
+                    s.flex_shrink = 0.0;
+                    tree.set_style(c, s).unwrap();
+                }
+            }
             tree.new_with_children(d.layout.clone(), &children).unwrap()
         }
         AnyElement::Text(t) => {
@@ -735,6 +744,7 @@ fn paint<'e, S>(
             let b = content_bounds(pcx.tree, node, origin);
             let focused = pcx.cx.focused == Some(i.id);
             let caret_on = pcx.cx.caret_visible(&i.state.borrow());
+            let window_active = pcx.cx.window_focused;
             let scale = pcx.cx.scale;
             let mut state = i.state.borrow_mut();
             let caret = state.paint(
@@ -744,6 +754,7 @@ fn paint<'e, S>(
                 b,
                 focused,
                 caret_on,
+                window_active,
                 scale,
             );
             if focused && state.reveal_caret {
@@ -874,8 +885,9 @@ fn paint_div<'e, S>(
         content_h += layout.padding.bottom;
         let max = (content_h - b.h).max(0.0);
         let off = pcx.cx.clamp_scroll(id, max);
-        child_origin.y -= off;
         let clip = pcx.scene.clip();
+        let over = pcx.cx.note_region(id, b.intersect(&clip), content_h, max);
+        child_origin.y -= off + over;
         pcx.frame.scrolls.push(ScrollRegion { id, bounds: b.intersect(&clip), layer: pcx.scene.layer() });
         pcx.scroll_stack.push((id, b));
     }
@@ -885,7 +897,8 @@ fn paint_div<'e, S>(
         paint(child, child_node, child_origin, style, pcx, deferred, in_deferred);
     }
 
-    if d.scroll && d.id.is_some() {
+    if let (true, Some(id)) = (d.scroll, d.id) {
+        pcx.cx.paint_scrollbar(pcx.scene, id);
         pcx.scroll_stack.pop();
     }
     if d.clip {

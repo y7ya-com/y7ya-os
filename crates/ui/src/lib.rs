@@ -7,6 +7,7 @@ mod cx;
 mod element;
 mod geom;
 mod input;
+mod kinetic;
 pub mod layer;
 mod platform;
 mod renderer;

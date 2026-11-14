@@ -12,7 +12,7 @@ use cosmic_text::{
 };
 use winit::keyboard::{Key, NamedKey};
 
-use crate::cx::{CARET_BLINK_MS, Cx};
+use crate::cx::Cx;
 use crate::geom::{Bounds, Color, Point};
 use crate::input::KeyPress;
 use crate::scene::Scene;
@@ -567,6 +567,13 @@ impl TextView {
     }
 }
 
+impl TextView {
+    /// Identifies this view's scroller to the fade timer (it lives behind an `Rc`).
+    fn scroller_key(&self) -> u64 {
+        self as *const Self as usize as u64
+    }
+}
+
 impl Widget for TextView {
     fn paint(&mut self, cx: &mut Cx, scene: &mut Scene, bounds: Bounds, focused: bool) -> Option<Bounds> {
         let size = ((bounds.w - 2.0 * self.inset.0).max(1.0), (bounds.h - self.inset.1).max(1.0));
@@ -582,7 +589,7 @@ impl Widget for TextView {
         let scroll = self.editor.with_buffer(|b| b.scroll());
         let origin = Point { x: bounds.x + self.inset.0 - scroll.horizontal, y: bounds.y + self.inset.1 };
         let selection = self.editor.selection_bounds();
-        let sel_color = if focused { self.selection_color } else { self.inactive_selection_color };
+        let sel_color = if focused && cx.window_focused { self.selection_color } else { self.inactive_selection_color };
         let current = self.current_match();
         // A selected match shows as the current match instead.
         let selection = selection.filter(|_| current.is_none());
@@ -624,7 +631,7 @@ impl Widget for TextView {
             }
             draw_buffer(&mut cx.text.fonts, &mut cx.text.atlas, scene, b, origin, self.style.color, cx.scale);
         });
-        let blink_on = self.last_activity.elapsed().as_millis() / CARET_BLINK_MS % 2 == 0;
+        let blink_on = cx.caret_on(self.last_activity);
         if let (true, true, true, Some(c)) = (focused, blink_on, self.selection().is_none(), caret) {
             let inset = (c.h * 0.1).round();
             scene.rect(Bounds::new(c.x.round(), c.y + inset, 2.0, c.h - 2.0 * inset), self.caret_color, 1.0);
@@ -640,8 +647,11 @@ impl Widget for TextView {
             let frac = scroll.line as f32 / (total - lines_in_view).max(1) as f32;
             let top = 3.0 + (track - h) * frac.min(1.0);
             self.thumb = Some((top, h));
-            let w = if self.thumb_grab.is_some() { 8.0 } else { 6.0 };
-            scene.rect(Bounds::new(bounds.right() - w - 3.0, bounds.y + top, w, h), self.scrollbar_color, w / 2.0);
+            let w = if self.thumb_grab.is_some() { 10.0 } else { 7.0 };
+            // Shown while scrolling, then faded out, like the framework's own.
+            let a = if self.thumb_grab.is_some() { 1.0 } else { cx.scroller_alpha(self.scroller_key()) };
+            let c = self.scrollbar_color;
+            scene.rect(Bounds::new(bounds.right() - w - 3.0, bounds.y + top, w, h), c.alpha(c.a * a), w / 2.0);
         }
         caret
     }
@@ -752,6 +762,7 @@ impl Widget for TextView {
 
     fn mouse_drag(&mut self, local: Point, cx: &mut Cx) {
         if let (Some(grab), Some((_, h))) = (self.thumb_grab, self.thumb) {
+            cx.touch_scroller(self.scroller_key());
             let track = self.size.1 + self.inset.1 - 6.0;
             let frac = ((local.y - 3.0 - grab) / (track - h).max(1.0)).clamp(0.0, 1.0);
             let total = self.line_count();
@@ -770,6 +781,7 @@ impl Widget for TextView {
 
     fn scroll(&mut self, dy: f32, cx: &mut Cx) -> bool {
         self.editor.action(&mut cx.text.fonts, Action::Scroll { pixels: dy });
+        cx.touch_scroller(self.scroller_key());
         true
     }
 

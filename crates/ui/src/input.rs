@@ -55,6 +55,8 @@ pub struct TextInput {
     pub first_line_style: Option<TextStyle>,
     pub placeholder_color: Color,
     pub selection_color: Color,
+    /// The selection while the window is inactive (macOS grays it out).
+    pub inactive_selection_color: Color,
     pub caret_color: Color,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
@@ -78,6 +80,7 @@ impl TextInput {
             first_line_style: None,
             placeholder_color: Color::BLACK.alpha(0.3),
             selection_color: Color::BLACK.alpha(0.2),
+            inactive_selection_color: Color { r: 0.5, g: 0.5, b: 0.5, a: 0.3 },
             caret_color: Color::BLACK,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -144,6 +147,11 @@ impl TextInput {
         self.editor.set_selection(Selection::None);
         self.editor.set_cursor(end);
         self.last_activity = Instant::now();
+    }
+
+    /// The selected text, if any.
+    pub fn selected_text(&self) -> Option<String> {
+        self.editor.copy_selection().filter(|s| !s.is_empty())
     }
 
     pub fn select_all(&mut self) {
@@ -335,6 +343,9 @@ impl TextInput {
                         NamedKey::ArrowRight => Some(Motion::Right),
                         NamedKey::ArrowUp if !self.single_line => Some(Motion::Up),
                         NamedKey::ArrowDown if !self.single_line => Some(Motion::Down),
+                        // A one-line field jumps to its ends, like AppKit's.
+                        NamedKey::ArrowUp => Some(Motion::BufferStart),
+                        NamedKey::ArrowDown => Some(Motion::BufferEnd),
                         NamedKey::Home => Some(Motion::Home),
                         NamedKey::End => Some(Motion::End),
                         NamedKey::PageUp if !self.single_line => Some(Motion::PageUp),
@@ -451,6 +462,7 @@ impl TextInput {
         bounds: Bounds,
         focused: bool,
         caret_on: bool,
+        window_active: bool,
         scale: f32,
     ) -> Option<Bounds> {
         if (self.width - bounds.w).abs() > 0.5 {
@@ -470,6 +482,7 @@ impl TextInput {
         }
 
         let selection = if focused { self.editor.selection_bounds() } else { None };
+        let selection_color = if window_active { self.selection_color } else { self.inactive_selection_color };
         let cursor = self.editor.cursor();
         let mut caret = None;
         self.editor.with_buffer(|b| {
@@ -479,12 +492,12 @@ impl TextInput {
                     for (x, w) in run.highlight(start, end) {
                         any = true;
                         let r = Bounds::new(origin.x + x, origin.y + run.line_top, w.max(1.0), run.line_height);
-                        scene.rect(r, self.selection_color, 0.0);
+                        scene.rect(r, selection_color, 0.0);
                     }
                     // Empty lines inside a selection still get a sliver, like macOS.
                     if !any && run.glyphs.is_empty() && run.line_i > start.line && run.line_i < end.line {
                         let r = Bounds::new(origin.x, origin.y + run.line_top, 6.0, run.line_height);
-                        scene.rect(r, self.selection_color, 0.0);
+                        scene.rect(r, selection_color, 0.0);
                     }
                 }
                 if caret.is_none() && run.line_i == cursor.line {

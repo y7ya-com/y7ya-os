@@ -8,6 +8,9 @@ use super::input::TextInput;
 use super::text::TextSystem;
 
 pub const CARET_BLINK_MS: u128 = 530;
+/// After this long without typing the caret stops blinking and stays on, so
+/// an idle window with a focused field doesn't keep waking up.
+pub const CARET_BLINK_FOR: std::time::Duration = std::time::Duration::from_secs(20);
 
 pub(crate) enum WindowCommand {
     Close,
@@ -45,6 +48,8 @@ pub struct Cx {
     /// Layer-shell surfaces (see `layer.rs`).
     pub(crate) layers: crate::layer::LayerCx,
     scroll: HashMap<ElementId, f32>,
+    /// Momentum, rubber band and scrollbars (see `kinetic.rs`).
+    pub(crate) scrolls: crate::kinetic::Scrolls,
 }
 
 /// Wakes the UI thread from another thread; the app's `on_external` runs.
@@ -89,6 +94,7 @@ impl Cx {
             waker: Waker::default(),
             layers: Default::default(),
             scroll: HashMap::new(),
+            scrolls: Default::default(),
         }
     }
 
@@ -153,8 +159,16 @@ impl Cx {
         self.redraw = true;
     }
 
+    /// Blinking while the window has focus, solid while typing (and once it
+    /// has blinked for `CARET_BLINK_FOR`), hidden in inactive windows.
     pub fn caret_visible(&self, input: &TextInput) -> bool {
-        (Instant::now() - input.last_activity).as_millis() / CARET_BLINK_MS % 2 == 0
+        self.caret_on(input.last_activity)
+    }
+
+    /// The caret rule of `caret_visible`, for widgets that track their own activity.
+    pub fn caret_on(&self, last_activity: Instant) -> bool {
+        let idle = Instant::now() - last_activity;
+        self.window_focused && (idle >= CARET_BLINK_FOR || idle.as_millis() / CARET_BLINK_MS % 2 == 0)
     }
 
     pub(crate) fn effective_window_radius(&self) -> f32 {

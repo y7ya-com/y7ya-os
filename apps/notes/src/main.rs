@@ -10,10 +10,13 @@ use ui::WindowOptions;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    // `notes --snapshot out.png [--light] [--sync]` renders sample data offscreen.
+    // `notes --snapshot out.png [--light] [--sync] [--folder <name>|deleted] [--search <text>]
+    // [--menu] [--folder-menu] [--rename] [--no-sidebar]` renders sample data offscreen.
     if let Some(i) = args.iter().position(|a| a == "--snapshot") {
         let path = std::path::PathBuf::from(args.get(i + 1).expect("--snapshot needs a path"));
         let dark = !args.iter().any(|a| a == "--light");
+        let arg = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+        let flag = |name: &str| args.iter().any(|a| a == name);
         let mut store = notes::demo_store();
         // `--sync` shows the pairing sheet with a real code from a throwaway identity.
         let sync = args.iter().any(|a| a == "--sync");
@@ -22,7 +25,22 @@ fn main() {
             let engine = y7_sync::Engine::start(dir, y7_sync::device_name(), Arc::new(SyncEvents::default()));
             store.core = Some(Arc::new(notes_core::Core::with_hub(Arc::new(engine))));
         }
-        ui::snapshot((1180.0, 740.0), 2.0, dark, &path, |cx| NotesApp::new(store, None, cx), |app, _| {
+        ui::snapshot((1180.0, 740.0), 2.0, dark, &path, |cx| NotesApp::new(store, None, cx), |app, cx| {
+            if let Some(name) = arg("--folder") {
+                app.show_folder(&name, cx);
+            }
+            if let Some(q) = arg("--search") {
+                app.search_for(&q, cx);
+            }
+            if flag("--no-sidebar") {
+                app.hide_sidebar();
+            }
+            if flag("--rename") {
+                app.rename_preview(cx);
+            }
+            if flag("--menu") || flag("--folder-menu") {
+                app.menu_preview(flag("--folder-menu"), cx);
+            }
             if sync {
                 app.open_sync();
                 app.wait_for_pairing_code();

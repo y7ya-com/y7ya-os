@@ -19,10 +19,36 @@ use super::widget::{Widget, WidgetEl};
 
 pub type ElementId = u64;
 
+/// Hashes `v` into an id. A bare `u64` is taken to be an id already (say one
+/// from an earlier `eid` call) and kept as is, so `.id(eid(x))`, `.id(x)`
+/// and `cx.hovered(x)` all agree.
 pub fn eid(v: impl Hash) -> ElementId {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut h = IdHasher::default();
     v.hash(&mut h);
     h.finish()
+}
+
+/// `DefaultHasher`, except that a lone `write_u64` passes straight through.
+#[derive(Default)]
+struct IdHasher {
+    inner: std::collections::hash_map::DefaultHasher,
+    writes: u32,
+    raw: u64,
+}
+
+impl Hasher for IdHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        self.writes += 2;
+        self.inner.write(bytes);
+    }
+    fn write_u64(&mut self, v: u64) {
+        self.writes += 1;
+        self.raw = v;
+        self.inner.write_u64(v);
+    }
+    fn finish(&self) -> u64 {
+        if self.writes == 1 { self.raw } else { self.inner.finish() }
+    }
 }
 
 pub type Handler<S> = Rc<dyn Fn(&mut S, &mut Cx)>;
@@ -73,6 +99,7 @@ pub struct Div<S> {
     pub(crate) border_bottom: Option<Color>,
     pub(crate) radius: f32,
     pub(crate) shadow: Option<(Color, f32, f32)>,
+    pub(crate) ring: Option<(Color, f32)>,
     pub(crate) text: TextOverrides,
     pub(crate) cursor: Option<CursorIcon>,
     pub(crate) children: Vec<AnyElement<S>>,
@@ -94,13 +121,16 @@ pub struct Div<S> {
 pub fn div<S>() -> Div<S> {
     Div {
         id: None,
-        layout: Style { display: Display::Flex, ..Default::default() },
+        // Relative, so absolutely positioned children (`inset_0`, `absolute`)
+        // are placed and sized against this div rather than the window.
+        layout: Style { display: Display::Flex, position: Position::Relative, ..Default::default() },
         bg: None,
         hover_bg: None,
         border: None,
         border_bottom: None,
         radius: 0.0,
         shadow: None,
+        ring: None,
         text: TextOverrides::default(),
         cursor: None,
         children: Vec::new(),
@@ -197,6 +227,10 @@ pub trait Styled: Sized {
     }
     fn h_full(mut self) -> Self {
         self.layout_mut().size.height = Dimension::percent(1.0);
+        self
+    }
+    fn min_w(mut self, v: f32) -> Self {
+        self.layout_mut().min_size.width = LengthPercentageAuto::length(v);
         self
     }
     fn min_h(mut self, v: f32) -> Self {
@@ -326,6 +360,16 @@ impl<S> Div<S> {
         self.shadow = Some((c, blur, dy));
         self
     }
+    /// A ring `w` wide just outside the edge, following the corner radius:
+    /// the keyboard focus ring (see `native::focus_ring`).
+    pub fn ring(mut self, c: Color, w: f32) -> Self {
+        self.ring = Some((c, w));
+        self
+    }
+    /// `ring` with the system focus ring, when `on`.
+    pub fn focus_ring(self, on: bool, cx: &Cx) -> Self {
+        if on { self.ring(crate::native::focus_ring(cx), crate::native::FOCUS_RING_W) } else { self }
+    }
     pub fn text_size(mut self, v: f32) -> Self {
         self.text.size = Some(v);
         self
@@ -422,11 +466,12 @@ pub struct Text {
     pub(crate) content: String,
     pub(crate) overrides: TextOverrides,
     pub(crate) truncate: bool,
+    pub(crate) tabular: bool,
     pub(crate) layout: Style,
 }
 
 pub fn text(s: impl Into<String>) -> Text {
-    Text { content: s.into(), overrides: TextOverrides::default(), truncate: false, layout: Style::default() }
+    Text { content: s.into(), overrides: TextOverrides::default(), truncate: false, tabular: false, layout: Style::default() }
 }
 
 impl Styled for Text {
@@ -450,6 +495,12 @@ impl Text {
     }
     pub fn line_height(mut self, v: f32) -> Self {
         self.overrides.line_height = Some(v);
+        self
+    }
+    /// Fixed-width figures, for numbers that line up in columns or change
+    /// in place (times, sizes, percentages, a calculator display).
+    pub fn tabular(mut self) -> Self {
+        self.tabular = true;
         self
     }
     /// Single line, cut off with an ellipsis.
@@ -520,7 +571,7 @@ impl<S> From<Canvas> for AnyElement<S> {
 // layout + paint
 
 enum Measure {
-    Text { content: String, style: TextStyle, truncate: bool },
+    Text { content: String, style: TextStyle, truncate: bool, tabular: bool },
     Input(Rc<RefCell<TextInput>>),
 }
 
@@ -572,11 +623,20 @@ fn build<S>(el: &AnyElement<S>, tree: &mut TaffyTree<Measure>, inherited: TextSt
         AnyElement::Div(d) => {
             let style = d.text.apply(inherited);
             let children: Vec<NodeId> = d.children.iter().map(|c| build(c, tree, style)).collect();
+            if d.scroll {
+                // Rows in a scrolling list keep their height instead of
+                // squeezing to fit the viewport.
+                for &c in &children {
+                    let mut s = tree.style(c).unwrap().clone();
+                    s.flex_shrink = 0.0;
+                    tree.set_style(c, s).unwrap();
+                }
+            }
             tree.new_with_children(d.layout.clone(), &children).unwrap()
         }
         AnyElement::Text(t) => {
             let style = t.overrides.apply(inherited);
-            let m = Measure::Text { content: t.content.clone(), style, truncate: t.truncate };
+            let m = Measure::Text { content: t.content.clone(), style, truncate: t.truncate, tabular: t.tabular };
             tree.new_leaf_with_context(t.layout.clone(), m).unwrap()
         }
         AnyElement::Input(i) => tree.new_leaf_with_context(i.layout.clone(), Measure::Input(i.state.clone())).unwrap(),
@@ -616,16 +676,16 @@ pub fn render_tree<S>(root: &AnyElement<S>, cx: &mut Cx, scene: &mut Scene, base
                         _ => None,
                     });
                     let (w, h) = match ctx {
-                        Measure::Text { content, style, truncate } => {
+                        Measure::Text { content, style, truncate, tabular } => {
                             if *truncate {
-                                let (mw, mh) = fonts.measure(content, style, None, true);
+                                let (mw, mh) = fonts.measure_with(content, style, None, true, *tabular);
                                 let w = match avail.width {
                                     AvailableSpace::MinContent => 0.0,
                                     _ => width.map_or(mw, |w| mw.min(w)),
                                 };
                                 (w, mh)
                             } else {
-                                fonts.measure(content, style, width, false)
+                                fonts.measure_with(content, style, width, false, *tabular)
                             }
                         }
                         Measure::Input(state) => state.borrow_mut().measure(&mut fonts.fonts, width),
@@ -677,6 +737,15 @@ fn abs_bounds(tree: &TaffyTree<Measure>, node: NodeId, origin: Point) -> Bounds 
     Bounds::new(origin.x + l.location.x, origin.y + l.location.y, l.size.width, l.size.height)
 }
 
+/// Like `abs_bounds`, minus padding and border: where a leaf's content goes.
+fn content_bounds(tree: &TaffyTree<Measure>, node: NodeId, origin: Point) -> Bounds {
+    let b = abs_bounds(tree, node, origin);
+    let l = tree.layout(node).unwrap();
+    let (left, top) = (l.padding.left + l.border.left, l.padding.top + l.border.top);
+    let (right, bottom) = (l.padding.right + l.border.right, l.padding.bottom + l.border.bottom);
+    Bounds::new(b.x + left, b.y + top, (b.w - left - right).max(0.0), (b.h - top - bottom).max(0.0))
+}
+
 fn paint<'e, S>(
     el: &'e AnyElement<S>,
     node: NodeId,
@@ -695,19 +764,21 @@ fn paint<'e, S>(
             paint_div(d, node, origin, style, pcx, deferred, false);
         }
         AnyElement::Text(t) => {
-            let b = abs_bounds(pcx.tree, node, origin);
+            let b = content_bounds(pcx.tree, node, origin);
             if b.intersect(&pcx.scene.clip()).h <= 0.0 {
                 return;
             }
             let style = t.overrides.apply(style);
             let scale = pcx.cx.scale;
-            let width = if t.truncate { Some(b.w) } else { Some(b.w) };
-            pcx.cx.text.paint(pcx.scene, &t.content, &style, width, t.truncate, Point { x: b.x, y: b.y }, scale);
+            let origin = Point { x: b.x, y: b.y };
+            pcx.cx.text.paint_with(pcx.scene, &t.content, &style, Some(b.w), t.truncate, t.tabular, origin, scale);
         }
         AnyElement::Input(i) => {
-            let b = abs_bounds(pcx.tree, node, origin);
+            let outer = abs_bounds(pcx.tree, node, origin);
+            let b = content_bounds(pcx.tree, node, origin);
             let focused = pcx.cx.focused == Some(i.id);
             let caret_on = pcx.cx.caret_visible(&i.state.borrow());
+            let window_active = pcx.cx.window_focused;
             let scale = pcx.cx.scale;
             let mut state = i.state.borrow_mut();
             let caret = state.paint(
@@ -717,6 +788,7 @@ fn paint<'e, S>(
                 b,
                 focused,
                 caret_on,
+                window_active,
                 scale,
             );
             if focused && state.reveal_caret {
@@ -733,7 +805,7 @@ fn paint<'e, S>(
             let clip = pcx.scene.clip();
             pcx.frame.hitboxes.push(Hitbox {
                 id: Some(i.id),
-                bounds: b.intersect(&clip),
+                bounds: outer.intersect(&clip),
                 layer: pcx.scene.layer(),
                 on_mouse_down: None,
                 on_click: None,
@@ -795,6 +867,10 @@ fn paint_div<'e, S>(
     if let Some((c, blur, dy)) = d.shadow {
         pcx.scene.shadow(Bounds::new(b.x, b.y + dy, b.w, b.h), c, d.radius, blur);
     }
+    if let Some((c, w)) = d.ring {
+        let r = Bounds::new(b.x - w, b.y - w, b.w + 2.0 * w, b.h + 2.0 * w);
+        pcx.scene.rect_bordered(r, Color::TRANSPARENT, d.radius + w, c, w);
+    }
     let fill = if hovered { d.hover_bg.or(d.bg) } else { d.bg };
     match d.border {
         Some((bc, bw)) => pcx.scene.rect_bordered(b, fill.unwrap_or(Color::TRANSPARENT), d.radius, bc, bw),
@@ -852,8 +928,9 @@ fn paint_div<'e, S>(
         content_h += layout.padding.bottom;
         let max = (content_h - b.h).max(0.0);
         let off = pcx.cx.clamp_scroll(id, max);
-        child_origin.y -= off;
         let clip = pcx.scene.clip();
+        let over = pcx.cx.note_region(id, b.intersect(&clip), content_h, max);
+        child_origin.y -= off + over;
         pcx.frame.scrolls.push(ScrollRegion { id, bounds: b.intersect(&clip), layer: pcx.scene.layer() });
         pcx.scroll_stack.push((id, b));
     }
@@ -863,7 +940,8 @@ fn paint_div<'e, S>(
         paint(child, child_node, child_origin, style, pcx, deferred, in_deferred);
     }
 
-    if d.scroll && d.id.is_some() {
+    if let (true, Some(id)) = (d.scroll, d.id) {
+        pcx.cx.paint_scrollbar(pcx.scene, id);
         pcx.scroll_stack.pop();
     }
     if d.clip {

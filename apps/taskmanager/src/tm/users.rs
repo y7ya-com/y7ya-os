@@ -84,8 +84,7 @@ impl TaskManager {
         let table = Table::new(&self.user_table, &columns, rows.len(), style).render(cx, |i, _| {
             let (sel, ui) = rows[i];
             let selected = self.user_sel == Some(sel);
-            let ink = if selected { style.selection_text } else { t.text };
-            let secondary = if selected { ink.alpha(0.75) } else { t.text_secondary };
+            let secondary = super::row_secondary(selected, &style, t);
             let u = &users[ui];
             let (name, count, cpu, mem, disk) = match sel {
                 USel::User(uid) => {
@@ -126,10 +125,10 @@ impl TaskManager {
             };
             Row::new(("user-row", format!("{sel:?}")), vec![
                 Cell::new(name),
-                Cell::new(text(count).color(secondary)),
-                Cell::new(text(format::percent(cpu))).bg(Some(t.heat(cpu / 50.0))),
-                Cell::new(text(format::bytes(mem))).bg(Some(t.heat(mem as f32 / total_mem * 4.0))),
-                Cell::new(text(format::disk_rate(disk))).bg(Some(t.heat(disk as f32 / 50e6))),
+                Cell::new(text(count).tabular().color(secondary)),
+                Cell::new(text(format::percent(cpu)).tabular()).bg(Some(t.heat(cpu / 50.0))),
+                Cell::new(text(format::bytes(mem)).tabular()).bg(Some(t.heat(mem as f32 / total_mem * 4.0))),
+                Cell::new(text(format::disk_rate(disk)).tabular()).bg(Some(t.heat(disk as f32 / 50e6))),
             ])
             .selected(selected)
             .on_mouse_down(move |s: &mut Self, cx: &mut Cx| {
@@ -152,7 +151,14 @@ impl TaskManager {
                 }
             })
         });
-        div().id("table").focusable().flex_1().flex_col().min_h(0.0).child(table)
+        div()
+            .id("table")
+            .focusable()
+            .flex_1()
+            .flex_col()
+            .min_h(0.0)
+            .child(table)
+            .child_if(rows.is_empty(), || Self::empty_state("No Results", t).into())
     }
 
     pub(super) fn users_key(&mut self, key: &KeyPress) -> bool {

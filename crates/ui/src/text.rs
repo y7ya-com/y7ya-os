@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use cosmic_text::{
-    Attrs, Buffer, CacheKey, Ellipsize, EllipsizeHeightLimit, Family, FontSystem, Metrics, Shaping, SwashCache,
-    SwashContent, Wrap,
+    Attrs, Buffer, CacheKey, Ellipsize, EllipsizeHeightLimit, Family, FeatureTag, FontFeatures, FontSystem, Metrics,
+    Shaping, SwashCache, SwashContent, Wrap,
 };
 
 use super::geom::{Bounds, Color, Point};
@@ -234,9 +234,10 @@ impl TextSystem {
         Self { fonts, atlas: GlyphAtlas::new(), cache: HashMap::new(), frame: 0 }
     }
 
-    fn key(text: &str, style: &TextStyle, width: Option<f32>, truncate: bool) -> u64 {
+    fn key(text: &str, style: &TextStyle, width: Option<f32>, truncate: bool, tabular: bool) -> u64 {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         text.hash(&mut h);
+        tabular.hash(&mut h);
         style.size.to_bits().hash(&mut h);
         style.line_height.to_bits().hash(&mut h);
         style.weight.hash(&mut h);
@@ -247,7 +248,13 @@ impl TextSystem {
 
     /// Shapes and lays out `text`, reusing the result from earlier frames when possible.
     pub fn layout(&mut self, text: &str, style: &TextStyle, width: Option<f32>, truncate: bool) -> &Buffer {
-        let key = Self::key(text, style, width, truncate);
+        self.layout_with(text, style, width, truncate, false)
+    }
+
+    /// `layout`, optionally with tabular (fixed-width) figures so columns of
+    /// numbers line up and counters don't jitter.
+    pub fn layout_with(&mut self, text: &str, style: &TextStyle, width: Option<f32>, truncate: bool, tabular: bool) -> &Buffer {
+        let key = Self::key(text, style, width, truncate, tabular);
         let frame = self.frame;
         let fonts = &mut self.fonts;
         let entry = self.cache.entry(key).or_insert_with(|| {
@@ -259,7 +266,13 @@ impl TextSystem {
                 buffer.set_wrap(Wrap::WordOrGlyph);
             }
             buffer.set_size(width.map(|w| w.round()), None);
-            buffer.set_text(text, &style.attrs(), Shaping::Advanced, None);
+            let mut attrs = style.attrs();
+            if tabular {
+                let mut f = FontFeatures::new();
+                f.enable(FeatureTag::new(b"tnum"));
+                attrs = attrs.font_features(f);
+            }
+            buffer.set_text(text, &attrs, Shaping::Advanced, None);
             buffer.shape_until_scroll(fonts, false);
             CachedBuffer { buffer, used: frame }
         });
@@ -268,8 +281,12 @@ impl TextSystem {
     }
 
     pub fn measure(&mut self, text: &str, style: &TextStyle, width: Option<f32>, truncate: bool) -> (f32, f32) {
+        self.measure_with(text, style, width, truncate, false)
+    }
+
+    pub fn measure_with(&mut self, text: &str, style: &TextStyle, width: Option<f32>, truncate: bool, tabular: bool) -> (f32, f32) {
         let line_h = style.metrics().line_height;
-        let buffer = self.layout(text, style, width, truncate);
+        let buffer = self.layout_with(text, style, width, truncate, tabular);
         buffer_size(buffer, line_h)
     }
 
@@ -283,8 +300,23 @@ impl TextSystem {
         origin: Point,
         scale: f32,
     ) {
-        let key = Self::key(text, style, width, truncate);
-        self.layout(text, style, width, truncate);
+        self.paint_with(scene, text, style, width, truncate, false, origin, scale)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn paint_with(
+        &mut self,
+        scene: &mut Scene,
+        text: &str,
+        style: &TextStyle,
+        width: Option<f32>,
+        truncate: bool,
+        tabular: bool,
+        origin: Point,
+        scale: f32,
+    ) {
+        let key = Self::key(text, style, width, truncate, tabular);
+        self.layout_with(text, style, width, truncate, tabular);
         let buffer = &self.cache[&key].buffer;
         draw_buffer(&mut self.fonts, &mut self.atlas, scene, buffer, origin, style.color, scale);
     }

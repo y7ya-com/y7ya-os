@@ -86,17 +86,17 @@ impl TaskManager {
                 let p = rows[i];
                 let pid = p.pid;
                 let selected = self.detail_sel == Some(pid);
-                let secondary = if selected { style.selection_text.alpha(0.75) } else { t.text_secondary };
+                let secondary = super::row_secondary(selected, &style, t);
                 let status = if self.reaper.is_pending(pid) { "Ending…" } else { state_name(p) };
                 let cmd = if p.cmdline.is_empty() { format!("[{}]", p.name) } else { p.cmdline.clone() };
                 Row::new(("detail", pid), vec![
                     Cell::new(text(p.name.clone()).truncate()),
-                    Cell::new(text(pid.to_string())),
+                    Cell::new(text(pid.to_string()).tabular()),
                     Cell::new(text(status).color(secondary)),
                     Cell::new(text(self.sampler.user_name(p.uid)).truncate()),
-                    Cell::new(text(format!("{:.0}", p.cpu))),
-                    Cell::new(text(format::bytes(p.mem))),
-                    Cell::new(text(p.threads.to_string())),
+                    Cell::new(text(format!("{:.0}", p.cpu)).tabular()),
+                    Cell::new(text(format::bytes(p.mem)).tabular()),
+                    Cell::new(text(p.threads.to_string()).tabular()),
                     Cell::new(text(cmd).color(secondary).truncate()),
                 ])
                 .selected(selected)
@@ -111,7 +111,14 @@ impl TaskManager {
                     s.process_menu(Sel::Pid(pid), cx);
                 })
             });
-        div().id("table").focusable().flex_1().flex_col().min_h(0.0).child(table)
+        div()
+            .id("table")
+            .focusable()
+            .flex_1()
+            .flex_col()
+            .min_h(0.0)
+            .child(table)
+            .child_if(rows.is_empty(), || Self::empty_state("No Results", t).into())
     }
 
     pub(super) fn details_key(&mut self, key: &KeyPress) -> bool {

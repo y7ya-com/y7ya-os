@@ -23,17 +23,24 @@ impl CalendarApp {
     }
 
     pub(super) fn sidebar(&self, cx: &Cx, t: &Theme) -> Div<Self> {
-        let mut header = div().h(TOOLBAR_H).shrink_0().flex_row().items_center().justify_between().px(12.0).window_drag();
+        let mut header = div()
+            .h(TOOLBAR_H)
+            .shrink_0()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .pl(native::TRAFFIC_LIGHTS_X)
+            .pr(10.0)
+            .window_drag();
         if let Some(buttons) = ui::chrome::window_buttons(true, cx, t.text) {
             header = header.child(buttons);
         }
-        let header = header.child(Self::icon_button("hide-sidebar", t, icons::sidebar, |s, _| s.sidebar_open = false));
+        let header = header.child(Self::icon_button("hide-sidebar", cx, t, icons::sidebar, |s, _| s.sidebar_open = false));
 
-        let mut rows: Vec<AnyElement<Self>> = vec![
-            text("On My Computer").size(11.0).weight(Weight::Semibold).color(t.text_secondary).pl(10.0).pt(6.0).pb(4.0).into(),
-        ];
+        let mut rows: Vec<AnyElement<Self>> = vec![native::sidebar_header("On My Computer", cx).pt(4.0).into()];
+        let outlined = self.menu_calendar();
         for c in &self.store.calendars {
-            rows.push(self.calendar_row(c.id, &c.name, &c.color, t).into());
+            rows.push(self.calendar_row(c.id, &c.name, &c.color, outlined == Some(c.id), cx, t).into());
         }
 
         div()
@@ -49,8 +56,6 @@ impl CalendarApp {
                     .scroll_y()
                     .flex_1()
                     .flex_col()
-                    .px(10.0)
-                    .gap(1.0)
                     .on_right_click(|s: &mut Self, cx: &mut Cx| s.sidebar_menu(None, cx))
                     .children(rows),
             )
@@ -60,7 +65,9 @@ impl CalendarApp {
             .child(div().h(10.0).shrink_0())
     }
 
-    fn calendar_row(&self, id: u64, name: &str, color: &str, t: &Theme) -> Div<Self> {
+    /// A calendar: its colored checkbox (in the icon slot) and name. `outlined`
+    /// while its context menu is open, like a macOS sidebar.
+    fn calendar_row(&self, id: u64, name: &str, color: &str, outlined: bool, cx: &Cx, t: &Theme) -> Div<Self> {
         let c = t.cal(color);
         let shown = !self.hidden.contains(&id);
         let check = div()
@@ -76,33 +83,38 @@ impl CalendarApp {
         } else {
             check.border(c, 1.5)
         };
+        let check = div().size(native::SIDEBAR_ICON).shrink_0().items_center().justify_center().child(check);
         let name_el: AnyElement<Self> = if self.renaming == Some(id) {
             div()
                 .flex_1()
-                .h(20.0)
+                .min_w_0()
+                .h(22.0)
                 .px(4.0)
                 .items_center()
                 .rounded(4.0)
                 .bg(t.content)
-                .border(t.accent, 1.5)
+                .border(t.divider, 0.5)
+                .focus_ring(cx.is_focused("rename"), cx)
                 .child(input("rename", &self.fields.rename).flex_1())
                 .into()
         } else {
             text(name.to_string()).truncate().flex_1().into()
         };
-        div()
+        let row = div()
             .id(("calendar", id))
-            .h(28.0)
+            .h(native::SIDEBAR_ROW_H)
             .shrink_0()
-            .px(8.0)
-            .rounded(6.0)
+            .mx(native::SIDEBAR_INSET)
+            .px(native::SIDEBAR_ROW_PAD)
+            .rounded(native::SIDEBAR_RADIUS)
             .flex_row()
             .items_center()
             .gap(8.0)
             .on_double_click(move |s: &mut Self, cx: &mut Cx| s.start_rename(id, cx))
             .on_right_click(move |s: &mut Self, cx: &mut Cx| s.sidebar_menu(Some(id), cx))
             .child(check)
-            .child(name_el)
+            .child(name_el);
+        if outlined { row.border(native::accent(cx), 2.0) } else { row }
     }
 
     /// The small month at the bottom of the sidebar.
@@ -117,7 +129,7 @@ impl CalendarApp {
                 .rounded(5.0)
                 .items_center()
                 .justify_center()
-                .hover_bg(t.icon_hover_bg)
+                .hover_bg(Self::hover_fill(id, cx, t))
                 .on_click(move |s: &mut Self, _: &mut Cx| s.mini_month = add_months(s.mini_month, dir))
                 .child(canvas(move |s, b| icon(s, b, c)).size(11.0))
         };
@@ -176,7 +188,7 @@ impl CalendarApp {
             .items_center()
             .justify_center()
             .on_mouse_down(move |s: &mut Self, cx: &mut Cx| s.go_to(d, cx))
-            .child(dot.child(text(d.day().to_string()).size(11.0).weight(weight).color(color)));
+            .child(dot.child(text(d.day().to_string()).size(11.0).weight(weight).tabular().color(color)));
         if in_view {
             cell = cell.bg(t.field);
         }

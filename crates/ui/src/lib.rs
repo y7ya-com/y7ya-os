@@ -7,6 +7,8 @@ mod cx;
 mod element;
 mod geom;
 mod input;
+mod kinetic;
+pub mod native;
 pub mod layer;
 mod platform;
 mod renderer;
@@ -14,6 +16,8 @@ mod scene;
 mod opacity;
 mod scroll;
 mod text;
+#[cfg(test)]
+mod tests;
 mod widget;
 pub mod widgets;
 

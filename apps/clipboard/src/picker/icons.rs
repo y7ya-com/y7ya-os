@@ -37,12 +37,3 @@ pub fn pin(scene: &mut Scene, b: Bounds, color: Color) {
     scene.segment(pt(x + 2.5 * s, y + 6.8 * s), pt(x + 9.5 * s, y + 6.8 * s), 1.4, color);
     scene.segment(pt(x + 6.0 * s, y + 6.8 * s), pt(x + 6.0 * s, y + 11.0 * s), 1.2, color);
 }
-
-/// Stacked pages: the empty-history illustration.
-pub fn clipboard(scene: &mut Scene, b: Bounds, color: Color) {
-    let (x, y, s) = frame(b, 18.0);
-    outline(scene, x + 3.0 * s, y + 3.0 * s, 12.0 * s, 14.0 * s, 2.0 * s, color, 1.4);
-    outline(scene, x + 6.5 * s, y + 1.5 * s, 5.0 * s, 3.0 * s, 1.0 * s, color, 1.3);
-    scene.segment(pt(x + 6.0 * s, y + 9.0 * s), pt(x + 12.0 * s, y + 9.0 * s), 1.2, color);
-    scene.segment(pt(x + 6.0 * s, y + 12.0 * s), pt(x + 10.5 * s, y + 12.0 * s), 1.2, color);
-}

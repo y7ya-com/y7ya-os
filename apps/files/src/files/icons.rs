@@ -230,11 +230,6 @@ pub fn xmark(scene: &mut Scene, b: Bounds, color: Color) {
     poly(scene, &[(13.5, 4.5), (4.5, 13.5)], x, y, s, w, color);
 }
 
-pub fn check(scene: &mut Scene, b: Bounds, color: Color) {
-    let (x, y, s, w) = frame(b);
-    poly(scene, &[(3.5, 9.5), (7.5, 13.5), (14.5, 4.5)], x, y, s, w * 1.1, color);
-}
-
 
 
 /// The disclosure triangle in column view rows.

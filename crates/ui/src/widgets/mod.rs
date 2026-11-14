@@ -3,12 +3,14 @@
 
 pub mod graph;
 pub mod image;
+pub mod menu;
 pub mod popover;
 pub mod segmented;
 mod spinner;
 pub mod table;
 pub mod text_view;
 
+pub use menu::{Menu, MenuItem, MenuKey};
 pub use popover::popover;
 pub use segmented::segmented;
 pub use spinner::{SPINNER_FRAME, spinner, spinner_phase};

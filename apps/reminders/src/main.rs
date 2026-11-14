@@ -12,7 +12,7 @@ const SIZE: (f32, f32) = (980.0, 660.0);
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     // `reminders --snapshot out.png [--light] [--list today|scheduled|all|flagged|completed|<name>]
-    // [--details] [--edit] [--search <text>] [--sync]` renders sample data offscreen.
+    // [--details] [--edit] [--search <text>] [--menu] [--list-menu] [--sync]` renders sample data offscreen.
     if let Some(i) = args.iter().position(|a| a == "--snapshot") {
         let path = std::path::PathBuf::from(args.get(i + 1).expect("--snapshot needs a path"));
         let dark = !args.iter().any(|a| a == "--light");
@@ -39,6 +39,9 @@ fn main() {
             }
             if flag("--edit") {
                 app.edit_preview(cx);
+            }
+            if flag("--menu") || flag("--list-menu") {
+                app.menu_preview(flag("--list-menu"), cx);
             }
             if flag("--sync") {
                 app.open_sync();

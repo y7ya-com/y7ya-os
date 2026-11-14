@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ui::widgets::table::{TableState, TableStyle};
+use ui::widgets::{Menu, MenuItem, MenuKey};
 use ui::*;
 
 use crate::sys::Sampler;
@@ -29,9 +30,7 @@ use performance::PerfItem;
 use processes::{PCol, Sel};
 use theme::Theme;
 
-const SIDEBAR_W: f32 = 220.0;
 const RAIL_W: f32 = 56.0;
-const TOOLBAR_H: f32 = 52.0;
 const ROW_H: f32 = 26.0;
 /// Sampling period while the window has focus, and while it doesn't.
 const ACTIVE_PERIOD: Duration = Duration::from_secs(1);
@@ -87,18 +86,6 @@ enum MenuAction {
     Service(String, svc::Action),
 }
 
-struct MenuItem {
-    label: String,
-    /// `None` draws a separator.
-    action: Option<MenuAction>,
-    enabled: bool,
-}
-
-struct Menu {
-    pos: Point,
-    items: Vec<MenuItem>,
-}
-
 enum Sheet {
     Properties(i32),
     RunTask,
@@ -113,7 +100,7 @@ pub struct TaskManager {
     search: Rc<RefCell<TextInput>>,
     query: String,
     run_input: Rc<RefCell<TextInput>>,
-    menu: Option<Menu>,
+    menu: Option<Menu<MenuAction>>,
     sheet: Option<Sheet>,
     next_sample: Instant,
     focused: bool,
@@ -307,58 +294,85 @@ impl TaskManager {
     }
 
     fn table_style(&self, t: &Theme, cx: &Cx) -> TableStyle {
-        let active = cx.window_focused && cx.is_focused("table");
+        // Accent while the list has focus in the active window, gray otherwise.
+        let focused = cx.is_focused("table");
         TableStyle {
             row_h: ROW_H,
             text: t.text,
             text_secondary: t.text_secondary,
             divider: t.divider,
             hover: t.hover,
-            selection: if active { t.accent } else { t.sidebar_selection.alpha(1.6) },
-            selection_text: if active { Color::WHITE } else { t.text },
+            selection: native::selection(cx, focused),
+            selection_text: native::selection_text(cx, focused, t.text),
             zebra: None,
         }
     }
 
     /// A push button: accent-filled for the default action, gray otherwise.
+    /// Darker while pressed, dimmed when disabled; the default button loses
+    /// its accent in an inactive window, as on macOS.
     fn button(
         id: &'static str,
         label: &str,
         primary: bool,
         enabled: bool,
+        cx: &Cx,
         t: &Theme,
         on_click: impl Fn(&mut Self, &mut Cx) + 'static,
     ) -> Div<Self> {
-        let (bg, fg) = if primary { (t.accent, Color::WHITE) } else { (t.field, t.text) };
+        let primary = primary && cx.window_focused;
+        let pressed = enabled && cx.hovered(id) && cx.mouse_down;
+        let (bg, hover, fg) = match (primary, pressed) {
+            (true, false) => (t.accent, t.accent, Color::WHITE),
+            (true, true) => (shade(t.accent, 0.82), shade(t.accent, 0.82), Color::WHITE),
+            (false, false) => (t.field, t.control_hover, native::toolbar_ink(cx, t.text)),
+            (false, true) => (t.control_pressed, t.control_pressed, t.text),
+        };
         let b = div()
             .id(id)
-            .h(26.0)
+            .h(28.0)
             .px(12.0)
+            .shrink_0()
             .rounded(6.0)
             .items_center()
             .justify_center()
-            .bg(if enabled { bg } else { bg.alpha(0.5) })
-            .child(text(label.to_string()).color(if enabled { fg } else { fg.alpha(0.4) }).weight(Weight::Medium));
-        if enabled { b.hover_bg(if primary { bg.alpha(0.85) } else { t.field.alpha(1.8) }).on_click(on_click) } else { b }
+            .bg(if enabled { bg } else { t.field });
+        let label = text(label.to_string()).color(if enabled { fg } else { t.text_tertiary });
+        if enabled { b.hover_bg(hover).on_click(on_click).child(label) } else { b.child(label) }
     }
 
+    /// A 32×28 toolbar button: hover fill, darker while pressed, lighter in
+    /// an inactive window.
     fn icon_button(
         id: &'static str,
+        cx: &Cx,
         t: &Theme,
         icon: fn(&mut Scene, Bounds, Color),
         on_click: impl Fn(&mut Self, &mut Cx) + 'static,
     ) -> Div<Self> {
-        let color = t.icon;
+        let color = native::toolbar_ink(cx, t.icon);
+        let pressed = cx.hovered(id) && cx.mouse_down;
         div()
             .id(id)
             .w(32.0)
             .h(28.0)
+            .shrink_0()
             .rounded(6.0)
             .items_center()
             .justify_center()
-            .hover_bg(t.hover.alpha(1.6))
+            .bg_opt(pressed.then_some(t.control_pressed))
+            .hover_bg(if pressed { t.control_pressed } else { t.control_hover })
             .on_click(on_click)
             .child(canvas(move |s, b| icon(s, b, color)).size(20.0))
+    }
+
+    /// Centered gray text over an empty list ("No Results").
+    fn empty_state(label: &str, t: &Theme) -> Div<Self> {
+        div()
+            .inset_0()
+            .items_center()
+            .justify_center()
+            .child(text(label.to_string()).size(15.0).weight(Weight::Medium).color(t.text_tertiary))
     }
 
     /// A small colored tile with the app's initial, standing in for its icon.
@@ -376,48 +390,21 @@ impl TaskManager {
             .child(text(initial).size(size * 0.6).weight(Weight::Bold).color(Color::WHITE))
     }
 
-    /// macOS segmented control.
-    fn segmented<T: Copy + PartialEq + 'static>(
-        &self,
-        id: &'static str,
-        options: &[(&str, T)],
-        current: T,
-        t: &Theme,
-        on_pick: fn(&mut Self, T, &mut Cx),
-    ) -> Div<Self> {
-        let mut row = div().flex_row().h(24.0).p(2.0).rounded(7.0).bg(t.field).gap(2.0);
-        for (i, (label, value)) in options.iter().enumerate() {
-            let value = *value;
-            let on = value == current;
-            let seg = div()
-                .id((id, i))
-                .h_full()
-                .px(12.0)
-                .rounded(5.0)
-                .items_center()
-                .justify_center()
-                .on_click(move |s: &mut Self, cx: &mut Cx| on_pick(s, value, cx))
-                .child(text(label.to_string()).size(12.0).weight(if on { Weight::Medium } else { Weight::Regular }));
-            row = row.child(if on {
-                seg.bg(if t.dark { rgba(0xffffff, 0.16) } else { Color::WHITE }).shadow(rgba(0x000000, 0.12), 2.0, 0.5)
-            } else {
-                seg.hover_bg(t.hover)
-            });
-        }
-        row
-    }
-
-    /// macOS switch. `on_accent` when it sits on an accent-colored (selected) row.
+    /// macOS switch. `on_accent` when it sits on an accent-colored (selected)
+    /// row; `active` is false in an inactive window, where an on switch grays.
     fn switch(
         id: impl std::hash::Hash,
         on: bool,
         on_accent: bool,
+        active: bool,
         t: &Theme,
         on_toggle: impl Fn(&mut Self, &mut Cx) + 'static,
     ) -> Div<Self> {
         let track = match (on, on_accent) {
             (true, true) => rgba(0xffffff, 0.45),
-            (true, false) => t.accent,
+            (true, false) if active => t.accent,
+            (true, false) if t.dark => rgba(0xffffff, 0.38),
+            (true, false) => rgba(0x000000, 0.28),
             (false, true) => rgba(0x000000, 0.22),
             _ if t.dark => rgba(0xffffff, 0.18),
             _ => rgba(0x000000, 0.14),
@@ -444,54 +431,68 @@ impl TaskManager {
 
     fn sidebar(&self, cx: &Cx, t: &Theme) -> Div<Self> {
         let open = self.sidebar_open;
-        let mut header = div().h(TOOLBAR_H).shrink_0().flex_row().items_center().window_drag();
+        let mut header = div().h(native::TOOLBAR_H).shrink_0().flex_row().items_center().window_drag();
         header = if open {
-            let mut h = header.justify_between().pl(20.0).pr(10.0);
+            let mut h = header.justify_between().pl(native::TRAFFIC_LIGHTS_X).pr(10.0);
             h = match self.window_buttons(true, cx, t) {
                 Some(b) => h.child(b),
-                None => h.child(text("Task Manager").weight(Weight::Bold)),
+                None => h.child(text("Task Manager").weight(Weight::Bold).color(native::toolbar_ink(cx, t.text))),
             };
-            h.child(Self::icon_button("toggle-sidebar", t, icons::sidebar, |s, _| s.sidebar_open = false))
+            h.child(Self::icon_button("toggle-sidebar", cx, t, icons::sidebar, |s, _| s.sidebar_open = false))
         } else {
-            header.justify_center().child(Self::icon_button("toggle-sidebar", t, icons::sidebar, |s, _| s.sidebar_open = true))
+            header.justify_center().child(Self::icon_button("toggle-sidebar", cx, t, icons::sidebar, |s, _| s.sidebar_open = true))
         };
 
-        let mut items = div().flex_col().gap(2.0).px(if open { 10.0 } else { 8.0 }).pt(4.0);
+        // Rows with the shared sidebar metrics; the collapsed rail keeps
+        // larger icon-only targets, Windows style.
+        // Icons take the accent, and go gray in an inactive window.
+        let tint = if cx.window_focused { t.accent } else { t.icon };
+        let mut items = div().flex_col().gap(1.0).pt(4.0);
         for page in Page::ALL {
             let selected = self.page == page;
             let icon = page.icon();
-            let color = if selected { t.accent } else { t.icon };
+            let color = if open || selected { tint } else { t.icon };
             let mut row = div()
                 .id(("nav", page))
-                .h(if open { 30.0 } else { 36.0 })
-                .rounded(6.0)
+                .h(if open { native::SIDEBAR_ROW_H } else { 36.0 })
+                .shrink_0()
+                .rounded(native::SIDEBAR_RADIUS)
                 .flex_row()
                 .items_center()
-                .gap(9.0)
-                .bg_opt(selected.then_some(t.sidebar_selection))
-                .hover_bg(if selected { t.sidebar_selection } else { t.hover })
-                .on_mouse_down(move |s: &mut Self, cx: &mut Cx| s.set_page(page, cx))
-                .child(canvas(move |s, b| icon(s, b, color)).size(18.0).shrink_0());
+                .gap(8.0)
+                .bg_opt(selected.then_some(native::sidebar_selection(cx)))
+                .on_mouse_down(move |s: &mut Self, cx: &mut Cx| s.set_page(page, cx));
             row = if open {
-                row.px(8.0).child(text(page.title()).weight(if selected { Weight::Medium } else { Weight::Regular }))
+                row.mx(native::SIDEBAR_INSET)
+                    .px(native::SIDEBAR_ROW_PAD)
+                    .child(canvas(move |s, b| icon(s, b, color)).size(native::SIDEBAR_ICON).shrink_0())
+                    .child(text(page.title()).truncate())
             } else {
-                row.justify_center()
+                row.mx(8.0).justify_center().child(canvas(move |s, b| icon(s, b, color)).size(18.0).shrink_0())
             };
             items = items.child(row);
         }
 
-        // A glance at the machine, like the Windows status bar.
+        // A glance at the machine, like the Windows status bar: labels left,
+        // figures right-aligned in fixed-width digits.
         let sys = &self.sampler.system;
+        let stat = |label: &str, value: String| {
+            div()
+                .flex_row()
+                .justify_between()
+                .child(text(label.to_string()).size(11.0).color(t.text_secondary))
+                .child(text(value).size(11.0).tabular().color(t.text_secondary))
+        };
         let footer = div()
             .flex_col()
-            .gap(3.0)
-            .px(20.0)
-            .pb(14.0)
-            .child(text(format!("CPU {:.0}%", sys.cpu.util.last())).size(11.0).color(t.text_secondary))
-            .child(text(format!("Memory {:.0}%", sys.mem.used.last())).size(11.0).color(t.text_secondary));
+            .gap(2.0)
+            .px(native::SIDEBAR_INSET + native::SIDEBAR_ROW_PAD)
+            .pb(12.0)
+            .child(stat("CPU", format!("{:.0}%", sys.cpu.util.last())))
+            .child(stat("Memory", format!("{:.0}%", sys.mem.used.last())));
 
         div()
-            .w(if open { SIDEBAR_W } else { RAIL_W })
+            .w(if open { native::SIDEBAR_W } else { RAIL_W })
             .h_full()
             .shrink_0()
             .flex_col()
@@ -504,7 +505,7 @@ impl TaskManager {
     fn toolbar(&mut self, cx: &mut Cx, t: &Theme) -> Div<Self> {
         let (title, subtitle) = self.page_title();
         let mut bar = div()
-            .h(TOOLBAR_H)
+            .h(native::TOOLBAR_H)
             .shrink_0()
             .flex_row()
             .items_center()
@@ -523,11 +524,11 @@ impl TaskManager {
                 .flex_col()
                 .flex_1()
                 .min_w_0()
-                .child(text(title).size(15.0).weight(Weight::Bold).truncate())
-                .child(text(subtitle).size(11.0).color(t.text_secondary).truncate()),
+                .child(text(title).size(15.0).weight(Weight::Bold).color(native::toolbar_ink(cx, t.text)).truncate())
+                .child(text(subtitle).size(11.0).tabular().color(native::toolbar_ink(cx, t.text_secondary)).truncate()),
         );
-        bar = bar.children(self.page_actions(t));
-        bar.child(self.search_field(t)).children(self.window_buttons(false, cx, t))
+        bar = bar.children(self.page_actions(cx, t));
+        bar.child(self.search_field(cx, t)).children(self.window_buttons(false, cx, t))
     }
 
     fn page_title(&self) -> (String, String) {
@@ -554,21 +555,22 @@ impl TaskManager {
         (self.page.title().into(), sub)
     }
 
-    fn page_actions(&self, t: &Theme) -> Vec<Div<Self>> {
+    fn page_actions(&self, cx: &Cx, t: &Theme) -> Vec<Div<Self>> {
         match self.page {
             Page::Processes => vec![
-                Self::button("run-task", "Run new task", false, true, t, |s: &mut Self, cx: &mut Cx| {
+                Self::button("run-task", "Run new task", false, true, cx, t, |s: &mut Self, cx: &mut Cx| {
+                    s.menu = None;
                     s.run_input.borrow_mut().set_text(&mut cx.text.fonts, "");
                     s.sheet = Some(Sheet::RunTask);
                     cx.focus("run-input");
                 }),
-                Self::button("end-task", "End task", false, self.proc_sel.is_some(), t, |s: &mut Self, _| {
+                Self::button("end-task", "End task", false, self.proc_sel.is_some(), cx, t, |s: &mut Self, _| {
                     if let Some(sel) = s.proc_sel.clone() {
                         s.end_selection(&sel);
                     }
                 }),
             ],
-            Page::Details => vec![Self::button("end-task", "End task", false, self.detail_sel.is_some(), t, |s: &mut Self, _| {
+            Page::Details => vec![Self::button("end-task", "End task", false, self.detail_sel.is_some(), cx, t, |s: &mut Self, _| {
                 if let Some(pid) = s.detail_sel {
                     s.end_pids(&[pid]);
                 }
@@ -579,7 +581,7 @@ impl TaskManager {
                     Some(e) if e.enabled => ("Disable", false),
                     _ => ("Enable", true),
                 };
-                vec![Self::button("toggle-startup", label, false, sel.is_some(), t, move |s: &mut Self, _| {
+                vec![Self::button("toggle-startup", label, false, sel.is_some(), cx, t, move |s: &mut Self, _| {
                     if let Some(f) = s.startup_sel.clone() {
                         s.set_startup(&f, enable);
                     }
@@ -597,24 +599,26 @@ impl TaskManager {
                     }
                 };
                 vec![
-                    Self::button("svc-start", "Start", false, can && !running, t, act(svc::Action::Start)),
-                    Self::button("svc-stop", "Stop", false, can && running, t, act(svc::Action::Stop)),
-                    Self::button("svc-restart", "Restart", false, can && running, t, act(svc::Action::Restart)),
+                    Self::button("svc-start", "Start", false, can && !running, cx, t, act(svc::Action::Start)),
+                    Self::button("svc-stop", "Stop", false, can && running, cx, t, act(svc::Action::Stop)),
+                    Self::button("svc-restart", "Restart", false, can && running, cx, t, act(svc::Action::Restart)),
                 ]
             }
             _ => Vec::new(),
         }
     }
 
-    fn search_field(&self, t: &Theme) -> Div<Self> {
-        let icon = t.icon;
+    fn search_field(&self, cx: &Cx, t: &Theme) -> Div<Self> {
+        let icon = native::toolbar_ink(cx, t.icon);
+        let clear_pressed = cx.hovered("search-clear") && cx.mouse_down;
         div()
             .id("search-box")
             .w(200.0)
             .h(28.0)
-            .ml(6.0)
+            .ml(4.0)
             .rounded(7.0)
             .bg(t.field)
+            .focus_ring(cx.is_focused("search"), cx)
             .flex_row()
             .items_center()
             .gap(6.0)
@@ -629,7 +633,7 @@ impl TaskManager {
                     .id("search-clear")
                     .size(16.0)
                     .rounded(8.0)
-                    .bg(c.alpha(0.5))
+                    .bg(c.alpha(if clear_pressed { 0.8 } else { 0.5 }))
                     .shrink_0()
                     .on_click(|s: &mut Self, cx: &mut Cx| {
                         s.clear_search(cx);
@@ -640,62 +644,18 @@ impl TaskManager {
             })
     }
 
-    fn menu_overlay(&self, menu: &Menu, cx: &Cx, t: &Theme) -> Div<Self> {
-        let (w, h) = cx.window_size;
-        let width = 210.0;
-        let est_h: f32 = 10.0 + menu.items.iter().map(|i| if i.action.is_some() { 24.0 } else { 9.0 }).sum::<f32>();
-        let x = menu.pos.x.min(w - width - 6.0).max(6.0);
-        let y = if menu.pos.y + est_h > h - 6.0 { (menu.pos.y - est_h).max(6.0) } else { menu.pos.y };
-        let mut panel = div()
-            .absolute(x, y)
-            .w(width)
-            .flex_col()
-            .p(5.0)
-            .rounded(8.0)
-            .bg(t.menu_bg)
-            .border(t.menu_border, 0.5)
-            .shadow(t.shadow, 14.0, 6.0)
-            .occlude();
-        for (i, item) in menu.items.iter().enumerate() {
-            match &item.action {
-                None => panel = panel.child(div().h(1.0).mt(4.0).mb(4.0).px(6.0).child(div().flex_1().h(1.0).bg(t.menu_border))),
-                Some(action) => {
-                    let mut row = div().id(("menu-item", i)).h(24.0).px(10.0).rounded(5.0).items_center();
-                    let color = if !item.enabled {
-                        t.text_tertiary
-                    } else if cx.hovered(("menu-item", i)) {
-                        Color::WHITE
-                    } else {
-                        t.text
-                    };
-                    if item.enabled {
-                        let action = action.clone();
-                        row = row.hover_bg(t.accent).on_click(move |s: &mut Self, cx: &mut Cx| s.run_menu(action.clone(), cx));
-                    }
-                    panel = panel.child(row.child(text(item.label.clone()).color(color).truncate()));
-                }
-            }
-        }
-        div()
-            .inset_0()
-            .deferred()
-            .on_mouse_down(|s: &mut Self, _| s.menu = None)
-            .on_right_click(|s: &mut Self, _| s.menu = None)
-            .child(panel)
-    }
-
     fn sheet_overlay(&self, sheet: &Sheet, cx: &mut Cx, t: &Theme) -> Div<Self> {
         let card = match sheet {
-            Sheet::Properties(pid) => self.properties_card(*pid, t),
-            Sheet::RunTask => self.run_task_card(t),
+            Sheet::Properties(pid) => self.properties_card(*pid, cx, t),
+            Sheet::RunTask => self.run_task_card(cx, t),
             Sheet::Message(title, body) => div()
                 .w(360.0)
                 .flex_col()
                 .items_center()
-                .gap(10.0)
+                .gap(8.0)
                 .child(text(title.clone()).size(15.0).weight(Weight::Bold))
                 .child(text(body.clone()).color(t.text_secondary).line_height(1.4))
-                .child(Self::button("sheet-ok", "OK", true, true, t, |s: &mut Self, _| s.sheet = None).w(96.0).mt(6.0)),
+                .child(Self::button("sheet-ok", "OK", true, true, cx, t, |s: &mut Self, _| s.sheet = None).w(96.0).mt(8.0)),
         };
         div()
             .inset_0()
@@ -716,7 +676,7 @@ impl TaskManager {
             )
     }
 
-    fn run_task_card(&self, t: &Theme) -> Div<Self> {
+    fn run_task_card(&self, cx: &Cx, t: &Theme) -> Div<Self> {
         div()
             .w(400.0)
             .flex_col()
@@ -730,7 +690,8 @@ impl TaskManager {
                     .px(8.0)
                     .rounded(7.0)
                     .bg(t.field)
-                    .border(t.accent.alpha(0.6), 1.5)
+                    .border(t.divider, 0.5)
+                    .focus_ring(cx.is_focused("run-input"), cx)
                     .items_center()
                     .cursor(CursorIcon::Text)
                     .on_mouse_down(|_: &mut Self, cx: &mut Cx| cx.focus("run-input"))
@@ -742,11 +703,11 @@ impl TaskManager {
                     .justify_end()
                     .gap(8.0)
                     .mt(4.0)
-                    .child(Self::button("run-cancel", "Cancel", false, true, t, |s: &mut Self, cx: &mut Cx| {
+                    .child(Self::button("run-cancel", "Cancel", false, true, cx, t, |s: &mut Self, cx: &mut Cx| {
                         s.sheet = None;
                         cx.focus("table");
                     }))
-                    .child(Self::button("run-ok", "Run", true, true, t, |s: &mut Self, cx: &mut Cx| s.run_task(cx))),
+                    .child(Self::button("run-ok", "Run", true, true, cx, t, |s: &mut Self, cx: &mut Cx| s.run_task(cx))),
             )
     }
 }
@@ -776,6 +737,17 @@ impl<S> JustifyIf for Div<S> {
     fn justify_end_if(self, cond: bool) -> Self {
         if cond { self.justify_end() } else { self }
     }
+}
+
+/// Secondary text in a table row: lighter white on an accent selection, the
+/// usual gray otherwise (including on a gray, unfocused selection).
+fn row_secondary(selected: bool, style: &TableStyle, t: &Theme) -> Color {
+    if selected && style.selection_text == Color::WHITE { Color::WHITE.alpha(0.75) } else { t.text_secondary }
+}
+
+/// `c` darkened by `k` (a pressed accent button).
+fn shade(c: Color, k: f32) -> Color {
+    Color { r: c.r * k, g: c.g * k, b: c.b * k, a: c.a }
 }
 
 fn spawn_detached(cmd: &mut std::process::Command) -> std::io::Result<()> {
@@ -822,7 +794,7 @@ impl App for TaskManager {
             .child(div().w(1.0).h_full().shrink_0().bg(t.divider))
             .child(main);
         if let Some(menu) = &self.menu {
-            root = root.child(self.menu_overlay(menu, cx, &t));
+            root = root.child(menu.render(cx, |s: &mut Self, a, cx| s.run_menu(a, cx), |s: &mut Self, _| s.menu = None));
         }
         if let Some(sheet) = &self.sheet {
             root = root.child(self.sheet_overlay(sheet, cx, &t));
@@ -852,16 +824,20 @@ impl App for TaskManager {
             // Typing goes to the command field; nothing else reacts.
             return !run;
         }
-        if key.is_named(NamedKey::Escape) {
-            if self.menu.take().is_none() {
-                if cx.is_focused("search") || !self.query.is_empty() {
-                    self.clear_search(cx);
-                }
-                cx.focus("table");
+        // An open context menu takes every key (arrows, Return, Escape, letters).
+        if let Some(menu) = &mut self.menu {
+            match menu.key(key, cx) {
+                MenuKey::Pick(action) => self.run_menu(action, cx),
+                MenuKey::Close => self.menu = None,
+                MenuKey::Stay => {}
             }
             return true;
         }
-        if self.menu.is_some() {
+        if key.is_named(NamedKey::Escape) {
+            if cx.is_focused("search") || !self.query.is_empty() {
+                self.clear_search(cx);
+            }
+            cx.focus("table");
             return true;
         }
         if key.ctrl && !key.alt {
@@ -967,6 +943,9 @@ impl TaskManager {
             cx.mouse = Point { x: 420.0, y: 210.0 };
             if let Some(sel) = self.proc_sel.clone() {
                 self.process_menu(sel, cx);
+                // Highlight the first row, as the keyboard would.
+                let down = KeyPress { key: Key::Named(NamedKey::ArrowDown), text: None, ctrl: false, shift: false, alt: false };
+                self.on_key(&down, cx);
             }
         }
     }

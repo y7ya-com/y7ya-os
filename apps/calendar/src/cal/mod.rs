@@ -17,14 +17,15 @@ use calendar_core::model::{date_key, day_start, local};
 use calendar_core::{Calendar, Event, Freq, Rule};
 use chrono::{Datelike, Duration, Local, NaiveDate, Weekday};
 use sync_ui::{Pairing, PairingHost, SyncEvents};
+use ui::widgets::{Menu, MenuItem, MenuKey};
 use ui::*;
 
 use layout::{DAY_MIN, View, at, minute_of, y_to_minutes};
 use model::Store;
 use theme::Theme;
 
-const SIDEBAR_W: f32 = 220.0;
-const TOOLBAR_H: f32 = 52.0;
+const SIDEBAR_W: f32 = native::SIDEBAR_W;
+const TOOLBAR_H: f32 = native::TOOLBAR_H;
 const SAVE_DELAY: StdDuration = StdDuration::from_millis(600);
 /// A press that moves less than this is a click, not a drag.
 const DRAG_SLOP: f32 = 4.0;
@@ -68,19 +69,6 @@ enum MenuAction {
     DeleteCalendar(u64),
 }
 
-struct MenuItem {
-    label: String,
-    color: Option<Color>,
-    checked: bool,
-    /// `None` draws a separator.
-    action: Option<MenuAction>,
-}
-
-struct Menu {
-    pos: Point,
-    items: Vec<MenuItem>,
-}
-
 /// The popover's text fields.
 struct Fields {
     title: Rc<RefCell<TextInput>>,
@@ -108,7 +96,7 @@ pub struct CalendarApp {
     grid_bounds: Rc<Cell<Bounds>>,
     drag: Option<Drag>,
     editor: Option<Editor>,
-    menu: Option<Menu>,
+    menu: Option<Menu<MenuAction>>,
     renaming: Option<u64>,
     fields: Fields,
     dirty_since: Option<Instant>,
@@ -513,6 +501,13 @@ impl CalendarApp {
         cx.blur();
     }
 
+    /// For previews: the context menu of the second calendar in the sidebar.
+    pub fn preview_menu(&mut self, cx: &mut Cx) {
+        let Some(id) = self.store.calendars.get(1).map(|c| c.id) else { return };
+        cx.mouse = pt(110.0, 182.0);
+        self.sidebar_menu(Some(id), cx);
+    }
+
     /// Fills the popover's fields from the event.
     fn load_fields(&mut self, cx: &mut Cx) {
         let Some(ed) = &self.editor else { return };
@@ -612,63 +607,56 @@ impl CalendarApp {
     // -- menus ---------------------------------------------------------------
 
     fn calendar_menu(&mut self, cx: &Cx) {
-        let t = Self::theme(cx);
         let current = self.editor.as_ref().and_then(|ed| self.store.event(ed.event)).map(|e| e.calendar);
         let items = self
             .store
             .calendars
             .iter()
-            .map(|c| MenuItem {
-                label: c.name.clone(),
-                color: Some(t.cal(&c.color)),
-                checked: Some(c.id) == current,
-                action: Some(MenuAction::SetCalendar(c.id)),
+            .map(|c| {
+                let item = MenuItem::new(c.name.clone(), MenuAction::SetCalendar(c.id));
+                item.checked(Some(c.id) == current).swatch(rgb(calendar_core::color_rgb(&c.color)))
             })
             .collect();
-        self.menu = Some(Menu { pos: cx.mouse, items });
+        self.menu = Some(Menu::new(cx.mouse, items));
     }
 
     fn repeat_menu(&mut self, cx: &Cx) {
         let current = self.editor.as_ref().and_then(|ed| self.store.event(ed.event)).and_then(|e| e.rule()).map(|r| r.freq);
-        let item = |label: &str, f: Option<Freq>| MenuItem {
-            label: label.into(),
-            color: None,
-            checked: current == f,
-            action: Some(MenuAction::SetRepeat(f)),
-        };
+        let item = |label: &str, f: Option<Freq>| MenuItem::new(label, MenuAction::SetRepeat(f)).checked(current == f);
         let items = vec![
             item("None", None),
-            MenuItem { label: String::new(), color: None, checked: false, action: None },
+            MenuItem::separator(),
             item("Every Day", Some(Freq::Daily)),
             item("Every Week", Some(Freq::Weekly)),
             item("Every Month", Some(Freq::Monthly)),
             item("Every Year", Some(Freq::Yearly)),
         ];
-        self.menu = Some(Menu { pos: cx.mouse, items });
+        self.menu = Some(Menu::new(cx.mouse, items));
     }
 
     fn sidebar_menu(&mut self, id: Option<u64>, cx: &Cx) {
-        let t = Self::theme(cx);
-        let mut items = vec![MenuItem { label: "New Calendar".into(), color: None, checked: false, action: Some(MenuAction::NewCalendar) }];
+        let mut items = vec![MenuItem::new("New Calendar", MenuAction::NewCalendar)];
         if let Some(cal) = id.and_then(|id| self.store.calendar(id)) {
-            items.push(MenuItem { label: String::new(), color: None, checked: false, action: None });
+            items.push(MenuItem::separator());
             for name in calendar_core::COLORS {
                 let mut label = name.to_string();
                 label[..1].make_ascii_uppercase();
-                items.push(MenuItem {
-                    label,
-                    color: Some(t.cal(name)),
-                    checked: cal.color == name,
-                    action: Some(MenuAction::SetColor(cal.id, name)),
-                });
+                let item = MenuItem::new(label, MenuAction::SetColor(cal.id, name)).checked(cal.color == name);
+                items.push(item.swatch(rgb(calendar_core::color_rgb(name))));
             }
-            items.push(MenuItem { label: String::new(), color: None, checked: false, action: None });
-            items.push(MenuItem { label: "Rename".into(), color: None, checked: false, action: Some(MenuAction::RenameCalendar(cal.id)) });
-            if self.store.calendars.len() > 1 {
-                items.push(MenuItem { label: "Delete".into(), color: None, checked: false, action: Some(MenuAction::DeleteCalendar(cal.id)) });
-            }
+            items.push(MenuItem::separator());
+            items.push(MenuItem::new("Rename", MenuAction::RenameCalendar(cal.id)));
+            items.push(MenuItem::new("Delete", MenuAction::DeleteCalendar(cal.id)).enabled(self.store.calendars.len() > 1));
         }
-        self.menu = Some(Menu { pos: cx.mouse, items });
+        self.menu = Some(Menu::new(cx.mouse, items));
+    }
+
+    /// The calendar whose context menu is open (its row gets an outline).
+    fn menu_calendar(&self) -> Option<u64> {
+        self.menu.as_ref()?.items.iter().find_map(|i| match i.action {
+            Some(MenuAction::RenameCalendar(id)) => Some(id),
+            _ => None,
+        })
     }
 
     // -- rendering -------------------------------------------------------------
@@ -695,21 +683,30 @@ impl CalendarApp {
         }
     }
 
+    /// Hover fill for a borderless button, darker while it's pressed.
+    fn hover_fill(id: impl std::hash::Hash, cx: &Cx, t: &Theme) -> Color {
+        if cx.hovered(id) && cx.mouse_down { t.icon_pressed_bg } else { t.icon_hover_bg }
+    }
+
+    /// A 32×28 toolbar button: hover fill, darker while pressed, lighter in
+    /// an inactive window.
     fn icon_button(
         id: &'static str,
+        cx: &Cx,
         t: &Theme,
         icon: fn(&mut Scene, Bounds, Color),
         on_click: impl Fn(&mut Self, &mut Cx) + 'static,
     ) -> Div<Self> {
-        let color = t.icon;
+        let color = native::toolbar_ink(cx, t.icon);
         div()
             .id(id)
             .w(32.0)
             .h(28.0)
+            .shrink_0()
             .rounded(6.0)
             .items_center()
             .justify_center()
-            .hover_bg(t.icon_hover_bg)
+            .hover_bg(Self::hover_fill(id, cx, t))
             .on_click(on_click)
             .child(canvas(move |s, b| icon(s, b, color)).size(18.0))
     }
@@ -720,9 +717,9 @@ impl CalendarApp {
             if let Some(buttons) = ui::chrome::window_buttons(true, cx, t.text) {
                 left = left.child(buttons.mr(10.0));
             }
-            left = left.child(Self::icon_button("show-sidebar", t, icons::sidebar, |s, _| s.sidebar_open = true));
+            left = left.child(Self::icon_button("show-sidebar", cx, t, icons::sidebar, |s, _| s.sidebar_open = true));
         }
-        left = left.child(Self::icon_button("add-event", t, icons::plus, |s: &mut Self, cx: &mut Cx| s.new_event(cx)));
+        left = left.child(Self::icon_button("add-event", cx, t, icons::plus, |s: &mut Self, cx: &mut Cx| s.new_event(cx)));
         let labels: Vec<&str> = View::ALL.iter().map(|v| v.label()).collect();
         let seg = ui::widgets::segmented(cx, "view", &labels, self.view.index(), |s: &mut Self, i, cx| s.set_view(View::ALL[i], cx));
         let right = div().flex_1().flex_row().items_center().justify_end().children(ui::chrome::window_buttons(false, cx, t.text));
@@ -731,7 +728,8 @@ impl CalendarApp {
             .shrink_0()
             .flex_row()
             .items_center()
-            .px(12.0)
+            .pl(if self.sidebar_open { 12.0 } else { native::TRAFFIC_LIGHTS_X })
+            .pr(12.0)
             .window_drag()
             .child(left)
             .child(seg)
@@ -739,7 +737,7 @@ impl CalendarApp {
     }
 
     /// "November 2026" with Today and the arrows.
-    fn title_row(&self, t: &Theme) -> Div<Self> {
+    fn title_row(&self, cx: &Cx, t: &Theme) -> Div<Self> {
         let (bold, rest, sub) = match self.view {
             View::Day => (self.date.format("%B %-d,").to_string(), self.date.format(" %Y").to_string(), Some(self.date.format("%A").to_string())),
             View::Week | View::Month => (self.date.format("%B").to_string(), self.date.format(" %Y").to_string(), None),
@@ -757,17 +755,19 @@ impl CalendarApp {
             )
             .child_if(sub.is_some(), || text(sub.clone().unwrap_or_default()).size(13.0).color(t.text_secondary).into());
         let arrow = |id: &'static str, icon: fn(&mut Scene, Bounds, Color), dir: i32| {
-            let c = t.icon;
+            let c = native::toolbar_ink(cx, t.icon);
             div()
                 .id(id)
                 .size(24.0)
                 .rounded(6.0)
                 .items_center()
                 .justify_center()
-                .hover_bg(t.icon_hover_bg)
+                .hover_bg(Self::hover_fill(id, cx, t))
                 .on_click(move |s: &mut Self, cx: &mut Cx| s.step(dir, cx))
                 .child(canvas(move |s, b| icon(s, b, c)).size(14.0))
         };
+        // A push button: a shade darker on hover, darker still while pressed.
+        let today_fill = if cx.hovered("today") && cx.mouse_down { t.icon_pressed_bg.alpha(t.icon_pressed_bg.a * 1.5) } else { t.button_bg.alpha(t.button_bg.a * 1.5) };
         let nav = div()
             .flex_row()
             .items_center()
@@ -776,14 +776,14 @@ impl CalendarApp {
             .child(
                 div()
                     .id("today")
-                    .h(22.0)
+                    .h(24.0)
                     .px(10.0)
                     .rounded(6.0)
                     .items_center()
                     .bg(t.button_bg)
-                    .hover_bg(t.icon_hover_bg)
+                    .hover_bg(today_fill)
                     .on_click(|s: &mut Self, cx: &mut Cx| s.go_today(cx))
-                    .child(text("Today").size(12.5)),
+                    .child(text("Today").size(12.5).color(native::toolbar_ink(cx, t.text))),
             )
             .child(arrow("next", icons::chevron_right, 1));
         div().h(if sub.is_some() { 62.0 } else { 50.0 }).shrink_0().flex_row().items_center().px(20.0).child(title).child(nav)
@@ -795,59 +795,11 @@ impl CalendarApp {
             View::Month => self.month_view(cx, t),
             View::Year => self.year_view(cx, t),
         };
-        div().flex_1().h_full().flex_col().bg(t.content).child(self.toolbar(cx, t)).child(self.title_row(t)).child(body)
+        div().flex_1().h_full().flex_col().bg(t.content).child(self.toolbar(cx, t)).child(self.title_row(cx, t)).child(body)
     }
 
     fn content_width(&self, cx: &Cx) -> f32 {
         cx.window_size.0 - if self.sidebar_open { SIDEBAR_W + 1.0 } else { 0.0 }
-    }
-
-    fn menu_overlay(&self, menu: &Menu, cx: &Cx, t: &Theme) -> Div<Self> {
-        let (w, h) = cx.window_size;
-        let width = 200.0;
-        let est_h: f32 = 10.0 + menu.items.iter().map(|i| if i.action.is_some() { 24.0 } else { 9.0 }).sum::<f32>();
-        let x = menu.pos.x.min(w - width - 6.0).max(6.0);
-        let y = if menu.pos.y + est_h > h - 6.0 { (menu.pos.y - est_h).max(6.0) } else { menu.pos.y };
-        let mut panel = div()
-            .absolute(x, y)
-            .w(width)
-            .flex_col()
-            .p(5.0)
-            .rounded(8.0)
-            .bg(t.menu_bg)
-            .border(t.menu_border, 0.5)
-            .shadow(t.shadow, 14.0, 6.0)
-            .occlude();
-        for (i, item) in menu.items.iter().enumerate() {
-            let Some(action) = &item.action else {
-                panel = panel.child(div().h(1.0).mt(4.0).mb(4.0).px(6.0).child(div().flex_1().h(1.0).bg(t.menu_border)));
-                continue;
-            };
-            let hovered = cx.hovered(("menu-item", i));
-            let ink = if hovered { Color::WHITE } else { t.text };
-            let action = action.clone();
-            let mut row = div()
-                .id(("menu-item", i))
-                .h(24.0)
-                .px(6.0)
-                .rounded(5.0)
-                .flex_row()
-                .items_center()
-                .gap(6.0)
-                .hover_bg(t.menu_highlight)
-                .on_click(move |s: &mut Self, cx: &mut Cx| s.run_menu(action.clone(), cx));
-            row = row.child(div().w(12.0).child_if(item.checked, || canvas(move |s, b| icons::check(s, b, ink, 1.6)).size(12.0).into()));
-            if let Some(c) = item.color {
-                row = row.child(div().size(10.0).rounded(5.0).bg(c));
-            }
-            panel = panel.child(row.child(text(item.label.clone()).color(ink).truncate()));
-        }
-        div()
-            .inset_0()
-            .deferred()
-            .on_mouse_down(|s: &mut Self, _| s.menu = None)
-            .on_right_click(|s: &mut Self, _| s.menu = None)
-            .child(panel)
     }
 }
 
@@ -893,7 +845,7 @@ impl App for CalendarApp {
             root = root.child(popover);
         }
         if let Some(menu) = &self.menu {
-            root = root.child(self.menu_overlay(menu, cx, &t));
+            root = root.child(menu.render(cx, |s: &mut Self, a, cx| s.run_menu(a, cx), |s: &mut Self, _| s.menu = None));
         }
         if let Some(sheet) = self.pairing.sheet(cx, &self.sync_colors(&t)) {
             root = root.child(sheet);
@@ -908,18 +860,22 @@ impl App for CalendarApp {
         if self.pairing.on_key(key) {
             return true;
         }
+        if let Some(menu) = &mut self.menu {
+            match menu.key(key, cx) {
+                MenuKey::Pick(a) => self.run_menu(a, cx),
+                MenuKey::Close => self.menu = None,
+                MenuKey::Stay => {}
+            }
+            return true;
+        }
         if key.is_named(NamedKey::Escape) {
-            if self.menu.take().is_some() {
-            } else if self.renaming.is_some() {
+            if self.renaming.is_some() {
                 self.finish_rename(false, cx);
             } else if self.editor.is_some() {
                 self.close_editor(cx);
             } else {
                 self.selected = None;
             }
-            return true;
-        }
-        if self.menu.is_some() {
             return true;
         }
         let editing = cx.focused.is_some();
@@ -1116,8 +1072,19 @@ mod tests {
             app.on_input(eid("ed-etime"), cx);
             assert_eq!(app.store.event(id).unwrap().end, at(day, 16 * 60), "an end before the start is ignored");
 
-            // Repeat and calendar from the menus.
-            app.run_menu(MenuAction::SetRepeat(Some(Freq::Weekly)), cx);
+            // Repeat from its menu with the keyboard: None, Every Day, Every Week.
+            app.repeat_menu(cx);
+            let key = |k: NamedKey| KeyPress { key: Key::Named(k), text: None, ctrl: false, shift: false, alt: false };
+            for _ in 0..3 {
+                assert!(app.on_key(&key(NamedKey::ArrowDown), cx));
+            }
+            app.on_key(&key(NamedKey::Enter), cx);
+            assert!(app.menu.is_none());
+            assert_eq!(app.store.event(id).unwrap().rrule, "FREQ=WEEKLY");
+            // Escape closes a menu without closing the popover.
+            app.calendar_menu(cx);
+            app.on_key(&key(NamedKey::Escape), cx);
+            assert!(app.menu.is_none() && app.editor.is_some());
             app.run_menu(MenuAction::SetCalendar(900), cx);
             let e = app.store.event(id).unwrap();
             assert_eq!((e.rrule.as_str(), e.calendar), ("FREQ=WEEKLY", 900));

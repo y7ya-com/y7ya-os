@@ -4,7 +4,7 @@ use ui::widgets::table::{Cell, Column, Row, Table};
 use ui::*;
 
 use super::theme::Theme;
-use super::{Menu, MenuAction, MenuItem, TaskManager, icons, step};
+use super::{Menu, MenuAction, MenuItem, TaskManager, step};
 use crate::sys::autostart::StartupEntry;
 
 impl TaskManager {
@@ -26,6 +26,8 @@ impl TaskManager {
 
     pub(super) fn startup_page(&mut self, cx: &mut Cx, t: &Theme) -> Div<Self> {
         let rows = self.startup_rows();
+        let rows_empty = rows.is_empty();
+        let active = cx.window_focused;
         let columns = [
             Column::new("Name"),
             Column::new("Command"),
@@ -36,7 +38,7 @@ impl TaskManager {
         let table = Table::new(&self.startup_table, &columns, rows.len(), style).render(cx, |i, _| {
             let e = rows[i];
             let selected = self.startup_sel.as_deref() == Some(e.file.as_str());
-            let secondary = if selected { style.selection_text.alpha(0.75) } else { t.text_secondary };
+            let secondary = super::row_secondary(selected, &style, t);
             let file = e.file.clone();
             let enabled = e.enabled;
             let name = div()
@@ -50,7 +52,7 @@ impl TaskManager {
                 .flex_row()
                 .items_center()
                 .gap(8.0)
-                .child(Self::switch(("startup-switch", e.file.clone()), enabled, selected && style.selection_text == Color::WHITE, t, {
+                .child(Self::switch(("startup-switch", e.file.clone()), enabled, selected && style.selection_text == Color::WHITE, active, t, {
                     let file = file.clone();
                     move |s: &mut Self, _| {
                         s.startup_sel = Some(file.clone());
@@ -78,28 +80,24 @@ impl TaskManager {
             })
             .on_right_click(move |s: &mut Self, cx: &mut Cx| {
                 s.startup_sel = Some(f2.clone());
+                cx.focus("table");
                 let label = if enabled { "Disable" } else { "Enable" };
-                s.menu = Some(Menu {
-                    pos: cx.mouse,
-                    items: vec![MenuItem { label: label.into(), action: Some(MenuAction::SetStartup(f2.clone(), !enabled)), enabled: true }],
-                });
+                s.menu = Some(Menu::new(cx.mouse, vec![MenuItem::new(label, MenuAction::SetStartup(f2.clone(), !enabled)).shortcut("Space")]));
             })
         });
-        let body = div().id("table").focusable().flex_1().flex_col().min_h(0.0).child(table);
-        if self.startup.is_empty() {
-            let c = t.text_tertiary;
-            return body.child(
-                div()
-                    .inset_0()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .gap(8.0)
-                    .child(canvas(move |s, b| icons::startup(s, b, c)).size(36.0))
-                    .child(text("No startup apps").size(14.0).color(c)),
-            );
-        }
-        body
+        let empty = match (self.startup.is_empty(), rows_empty) {
+            (true, _) => Some("No Startup Apps"),
+            (false, true) => Some("No Results"),
+            _ => None,
+        };
+        div()
+            .id("table")
+            .focusable()
+            .flex_1()
+            .flex_col()
+            .min_h(0.0)
+            .child(table)
+            .children(empty.map(|label| Self::empty_state(label, t)))
     }
 
     pub(super) fn startup_key(&mut self, key: &KeyPress) -> bool {

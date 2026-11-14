@@ -16,14 +16,16 @@ pub struct Theme {
     pub card: Color,
     pub card_border: Color,
     pub hover: Color,
+    /// A control held down (or a menu button while its menu is open).
+    pub pressed: Color,
+    /// Toolbar glyphs.
+    pub icon: Color,
     pub success: Color,
     pub destructive: Color,
     pub warning: Color,
-    pub menu_bg: Color,
-    pub menu_border: Color,
-    pub shadow: Color,
     pub window_border: Color,
     pub text_selection: Color,
+    pub text_selection_inactive: Color,
 }
 
 impl Theme {
@@ -41,14 +43,14 @@ impl Theme {
             card: rgb(0xf5f5f7),
             card_border: rgba(0x000000, 0.07),
             hover: rgba(0x000000, 0.06),
+            pressed: rgba(0x000000, 0.12),
+            icon: rgba(0x000000, 0.55),
             success: rgb(0x34c759),
             destructive: rgb(0xff3b30),
             warning: rgb(0xff9f0a),
-            menu_bg: rgba(0xf6f6f6, 0.98),
-            menu_border: rgba(0x000000, 0.12),
-            shadow: rgba(0x000000, 0.18),
             window_border: rgba(0x000000, 0.22),
             text_selection: rgba(0x007aff, 0.25),
+            text_selection_inactive: rgb(0xdcdcdc),
         }
     }
 
@@ -66,14 +68,14 @@ impl Theme {
             card: rgb(0x2a2a2c),
             card_border: rgba(0xffffff, 0.07),
             hover: rgba(0xffffff, 0.08),
+            pressed: rgba(0xffffff, 0.16),
+            icon: rgba(0xffffff, 0.58),
             success: rgb(0x30d158),
             destructive: rgb(0xff453a),
             warning: rgb(0xff9f0a),
-            menu_bg: rgba(0x2c2c2e, 0.98),
-            menu_border: rgba(0xffffff, 0.14),
-            shadow: rgba(0x000000, 0.45),
             window_border: rgba(0xffffff, 0.14),
             text_selection: rgba(0x0a84ff, 0.45),
+            text_selection_inactive: rgb(0x464646),
         }
     }
 }

@@ -41,6 +41,10 @@ pub fn segmented<S: 'static>(
             .child(text(label.to_string()).size(12.5).weight(if i == selected { Weight::Medium } else { Weight::Regular }).color(ink));
         if i == selected {
             seg = seg.bg(knob).shadow(rgba(0x000000, if cx.dark { 0.3 } else { 0.12 }), 2.0, 0.5);
+        } else if cx.hovered((id, i)) {
+            // Pressed segments darken; hovered ones get a faint fill.
+            let a = if cx.mouse_down { 0.10 } else { 0.05 };
+            seg = seg.bg(if cx.dark { rgba(0xffffff, a) } else { rgba(0x000000, a) });
         }
         row = row.child(seg);
     }

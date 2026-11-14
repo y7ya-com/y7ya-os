@@ -55,6 +55,7 @@ impl TaskManager {
 
     pub(super) fn services_page(&mut self, cx: &mut Cx, t: &Theme) -> Div<Self> {
         let rows = self.service_rows();
+        let rows_empty = rows.is_empty();
         let columns =
             [Column::new("Name"), Column::new("Description"), Column::new("Status").width(96.0), Column::new("Type").width(80.0)];
         let style = self.table_style(t, cx);
@@ -70,7 +71,7 @@ impl TaskManager {
                 let unit = svc.unit.clone();
                 let selected = self.service_sel.as_deref() == Some(unit.as_str());
                 let ink = if selected { style.selection_text } else { t.text };
-                let secondary = if selected { ink.alpha(0.75) } else { t.text_secondary };
+                let secondary = super::row_secondary(selected, &style, t);
                 let dot = match svc.status().as_str() {
                     "Running" => t.success,
                     "Failed" => t.destructive,
@@ -99,34 +100,42 @@ impl TaskManager {
                 })
                 .on_right_click(move |s: &mut Self, cx: &mut Cx| {
                     s.service_sel = Some(u2.clone());
-                    let item = |label: &str, a: svc::Action, enabled: bool| MenuItem {
-                        label: label.into(),
-                        action: Some(MenuAction::Service(u2.clone(), a)),
-                        enabled: user && enabled,
+                    cx.focus("table");
+                    let item = |label: &str, a: svc::Action, enabled: bool| {
+                        MenuItem::new(label, MenuAction::Service(u2.clone(), a)).enabled(user && enabled)
                     };
-                    s.menu = Some(Menu {
-                        pos: cx.mouse,
-                        items: vec![
-                            item("Start", svc::Action::Start, !running),
-                            item("Stop", svc::Action::Stop, running),
-                            item("Restart", svc::Action::Restart, running),
-                        ],
-                    });
+                    s.menu = Some(Menu::new(cx.mouse, vec![
+                        item("Start", svc::Action::Start, !running),
+                        item("Stop", svc::Action::Stop, running),
+                        item("Restart", svc::Action::Restart, running),
+                    ]));
                 })
             });
 
-        let options = [("All", None), ("User", Some(Scope::User)), ("System", Some(Scope::System))];
+        const SCOPES: [Option<Scope>; 3] = [None, Some(Scope::User), Some(Scope::System)];
+        let current = SCOPES.iter().position(|s| *s == self.service_scope).unwrap_or(0);
         let filter_bar = div()
             .h(40.0)
             .shrink_0()
             .flex_row()
             .items_center()
             .justify_between()
-            .px(14.0)
+            .px(16.0)
             .border_b(t.divider)
-            .child(self.segmented("svc-scope", &options, self.service_scope, t, |s, v, _| s.service_scope = v))
+            .child(ui::widgets::segmented(cx, "svc-scope", &["All", "User", "System"], current, |s: &mut Self, i, _| {
+                s.service_scope = SCOPES[i]
+            }))
             .child(text("System services can only be viewed. Start and stop your own (user) services.").size(11.0).color(t.text_secondary).truncate().ml(16.0));
-        div().id("table").focusable().flex_1().flex_col().min_h(0.0).child(filter_bar).child(table)
+        let empty = rows_empty && !self.services_loading;
+        div()
+            .id("table")
+            .focusable()
+            .flex_1()
+            .flex_col()
+            .min_h(0.0)
+            .child(filter_bar)
+            .child(table)
+            .child_if(empty, || Self::empty_state(if self.query.is_empty() { "No Services" } else { "No Results" }, t).into())
     }
 
     pub(super) fn services_key(&mut self, key: &KeyPress, cx: &mut Cx) -> bool {

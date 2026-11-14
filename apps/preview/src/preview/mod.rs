@@ -7,7 +7,7 @@ use media::pdf;
 use media::{Kind, Loader};
 use ui::*;
 
-const TOOLBAR_H: f32 = 52.0;
+const TOOLBAR_H: f32 = native::TOOLBAR_H;
 const SIDEBAR_W: f32 = 170.0;
 const THUMB_W: f32 = 120.0;
 const THUMB_ROW_H: f32 = 168.0;
@@ -108,7 +108,7 @@ struct Theme {
     icon: Color,
     icon_disabled: Color,
     icon_hover_bg: Color,
-    accent: Color,
+    icon_pressed_bg: Color,
     window_border: Color,
 }
 
@@ -125,7 +125,7 @@ impl Theme {
                 icon: rgba(0xffffff, 0.66),
                 icon_disabled: rgba(0xffffff, 0.22),
                 icon_hover_bg: rgba(0xffffff, 0.08),
-                accent: rgb(0x0a84ff),
+                icon_pressed_bg: rgba(0xffffff, 0.14),
                 window_border: rgba(0xffffff, 0.14),
             }
         } else {
@@ -139,7 +139,7 @@ impl Theme {
                 icon: rgba(0x000000, 0.62),
                 icon_disabled: rgba(0x000000, 0.22),
                 icon_hover_bg: rgba(0x000000, 0.06),
-                accent: rgb(0x007aff),
+                icon_pressed_bg: rgba(0x000000, 0.11),
                 window_border: rgba(0x000000, 0.22),
             }
         }
@@ -415,13 +415,23 @@ impl PreviewApp {
 
     // -- rendering --------------------------------------------------------------
 
-    fn tool_button(id: &'static str, t: &Theme, enabled: bool, icon: fn(&mut Scene, Bounds, Color), on_click: impl Fn(&mut Self, &mut Cx) + 'static) -> Div<Self> {
-        let color = if enabled { t.icon } else { t.icon_disabled };
-        let mut d = div().id(id).w(32.0).h(28.0).rounded(6.0).items_center().justify_center().child(canvas(move |s, b| icon(s, b, color)).size(18.0));
-        if enabled {
-            d = d.hover_bg(t.icon_hover_bg).on_click(on_click);
+    /// A 32×28 toolbar button: hover fill, darker while pressed, dimmed when
+    /// disabled or in an inactive window.
+    fn tool_button(
+        id: &'static str,
+        cx: &Cx,
+        t: &Theme,
+        enabled: bool,
+        icon: fn(&mut Scene, Bounds, Color),
+        on_click: impl Fn(&mut Self, &mut Cx) + 'static,
+    ) -> Div<Self> {
+        let color = native::toolbar_ink(cx, if enabled { t.icon } else { t.icon_disabled });
+        let d = div().id(id).w(32.0).h(28.0).rounded(6.0).items_center().justify_center().child(canvas(move |s, b| icon(s, b, color)).size(18.0));
+        if !enabled {
+            return d;
         }
-        d
+        let pressed = cx.mouse_down && cx.hovered(id);
+        d.bg_opt(pressed.then_some(t.icon_pressed_bg)).hover_bg(if pressed { t.icon_pressed_bg } else { t.icon_hover_bg }).on_click(on_click)
     }
 
     fn toolbar(&mut self, cx: &Cx, t: &Theme) -> Div<Self> {
@@ -440,12 +450,13 @@ impl PreviewApp {
             (true, Some(p)) => p,
             (_, None) => subtitle,
         };
-        let mut bar = div().h(TOOLBAR_H).shrink_0().flex_row().items_center().gap(6.0).pl(20.0).pr(12.0).bg(t.window).border_b(t.divider).window_drag();
+        let mut bar =
+            div().h(TOOLBAR_H).shrink_0().flex_row().items_center().gap(6.0).pl(native::TRAFFIC_LIGHTS_X).pr(12.0).bg(t.window).border_b(t.divider).window_drag();
         if let Some(b) = ui::chrome::window_buttons(true, cx, t.text) {
             bar = bar.child(b.mr(12.0));
         }
         if self.pages.len() > 1 {
-            bar = bar.child(Self::tool_button("toggle-sidebar", t, true, icons::sidebar, |s, _| s.sidebar_open = !s.sidebar_open));
+            bar = bar.child(Self::tool_button("toggle-sidebar", cx, t, true, icons::sidebar, |s, _| s.sidebar_open = !s.sidebar_open));
         }
         bar = bar.child(
             div()
@@ -453,27 +464,29 @@ impl PreviewApp {
                 .flex_1()
                 .min_w_0()
                 .pl(6.0)
-                .child(text(self.window_title()).weight(Weight::Bold).truncate())
-                .child_if(!subtitle.is_empty(), || text(subtitle.clone()).size(11.0).color(t.text_secondary).truncate().into()),
+                .child(text(self.window_title()).weight(Weight::Bold).color(native::toolbar_ink(cx, t.text)).truncate())
+                .child_if(!subtitle.is_empty(), || {
+                    text(subtitle.clone()).size(11.0).tabular().color(native::toolbar_ink(cx, t.text_secondary)).truncate().into()
+                }),
         );
         let multi = self.pages.len() > 1;
         if multi {
             bar = bar
-                .child(Self::tool_button("prev", t, self.current > 0, icons::chevron_left, |s, cx| s.step(-1, cx)))
-                .child(Self::tool_button("next", t, self.current + 1 < self.pages.len(), icons::chevron_right, |s, cx| s.step(1, cx)))
+                .child(Self::tool_button("prev", cx, t, self.current > 0, icons::chevron_left, |s, cx| s.step(-1, cx)))
+                .child(Self::tool_button("next", cx, t, self.current + 1 < self.pages.len(), icons::chevron_right, |s, cx| s.step(1, cx)))
                 .child(div().w(1.0).h(18.0).bg(t.divider).mx(4.0));
         }
         bar = bar
-            .child(Self::tool_button("zoom-out", t, has_page, icons::zoom_out, |s, cx| s.zoom_step(false, cx)))
-            .child(Self::tool_button("zoom-in", t, has_page, icons::zoom_in, |s, cx| s.zoom_step(true, cx)))
-            .child(Self::tool_button("fit", t, has_page && self.zoom.is_some(), icons::fit, |s, _| {
+            .child(Self::tool_button("zoom-out", cx, t, has_page, icons::zoom_out, |s, cx| s.zoom_step(false, cx)))
+            .child(Self::tool_button("zoom-in", cx, t, has_page, icons::zoom_in, |s, cx| s.zoom_step(true, cx)))
+            .child(Self::tool_button("fit", cx, t, has_page && self.zoom.is_some(), icons::fit, |s, _| {
                 s.zoom = None;
                 s.pan = Point::default();
             }))
-            .child(Self::tool_button("actual-size", t, has_page, |sc, b, c| actual_size_icon(sc, b, c), |s, cx| s.set_zoom(1.0, None, cx)))
+            .child(Self::tool_button("actual-size", cx, t, has_page, |sc, b, c| actual_size_icon(sc, b, c), |s, cx| s.set_zoom(1.0, None, cx)))
             .child(div().w(1.0).h(18.0).bg(t.divider).mx(4.0))
-            .child(Self::tool_button("rotate-left", t, has_page, icons::rotate_left, |s, _| s.rotate(false)))
-            .child(Self::tool_button("rotate-right", t, has_page, icons::rotate_right, |s, _| s.rotate(true)));
+            .child(Self::tool_button("rotate-left", cx, t, has_page, icons::rotate_left, |s, _| s.rotate(false)))
+            .child(Self::tool_button("rotate-right", cx, t, has_page, icons::rotate_right, |s, _| s.rotate(true)));
         bar.children(ui::chrome::window_buttons(false, cx, t.text))
     }
 
@@ -492,33 +505,40 @@ impl PreviewApp {
                 Some(k) => k.to_string(),
                 None => self.pages[i].path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
             };
-            let accent = t.accent;
+            // Like Finder's icon view: a gray backdrop behind the selected
+            // page and an accent pill on its label (gray when inactive).
+            let backdrop = selected.then(|| native::unemphasized_selection(cx));
             let img: AnyElement<Self> = match thumb {
                 Some(img) => canvas(move |s, b| {
-                    let (r, _) = ui::fit_rect(b, (img.width() as f32, img.height() as f32), Fit::Scale);
-                    if selected {
-                        s.rect_bordered(r.inset(-4.0), Color::TRANSPARENT, 5.0, accent, 3.0);
+                    let (r, _) = ui::fit_rect(b.inset(8.0), (img.width() as f32, img.height() as f32), Fit::Scale);
+                    if let Some(c) = backdrop {
+                        s.rect(r.inset(-6.0), c, 8.0);
                     }
                     s.shadow(Bounds::new(r.x, r.y + 1.0, r.w, r.h), rgba(0x000000, 0.25), 1.0, 3.0);
                     s.image(r, &img, if pdf { 0.0 } else { 2.0 });
                 })
-                .w(THUMB_W)
-                .h(THUMB_ROW_H - 40.0)
+                .w(THUMB_W + 16.0)
+                .h(THUMB_ROW_H - 34.0)
                 .into(),
-                None => div().w(THUMB_W).h(THUMB_ROW_H - 40.0).into(),
+                None => div().w(THUMB_W + 16.0).h(THUMB_ROW_H - 34.0).into(),
             };
-            let (pill, fg) = if selected { (Some(t.accent), Color::WHITE) } else { (None, t.text_secondary) };
+            let (pill, fg) =
+                if selected { (Some(native::selection(cx, true)), native::selection_text(cx, true, t.text)) } else { (None, t.text_secondary) };
+            let mut label = text(label).size(11.0).color(fg).truncate();
+            if self.pages[i].pdf_page.is_some() {
+                label = label.tabular();
+            }
             list = list.child(
                 div()
                     .id(("thumb", i))
                     .h(THUMB_ROW_H)
                     .flex_col()
                     .items_center()
-                    .pt(14.0)
-                    .gap(8.0)
+                    .pt(8.0)
+                    .gap(4.0)
                     .on_mouse_down(move |s: &mut Self, cx: &mut Cx| s.go_to(i, cx))
                     .child(img)
-                    .child(div().px(7.0).h(18.0).max_w(THUMB_W + 20.0).rounded(9.0).items_center().bg_opt(pill).child(text(label).size(11.0).color(fg).truncate())),
+                    .child(div().px(7.0).h(18.0).max_w(THUMB_W + 20.0).rounded(9.0).items_center().bg_opt(pill).child(label)),
             );
         }
         div()

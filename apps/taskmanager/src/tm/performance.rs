@@ -87,9 +87,8 @@ impl TaskManager {
         }
         let mut list = div().id("perf-list").scroll_y().w(250.0).h_full().shrink_0().flex_col().gap(4.0).p(10.0);
         for item in items {
-            list = list.child(self.perf_card(item, t));
+            list = list.child(self.perf_card(item, cx, t));
         }
-        let _ = cx;
         div()
             .id("table")
             .focusable()
@@ -101,7 +100,7 @@ impl TaskManager {
             .child(self.perf_detail(self.perf_item, t))
     }
 
-    fn perf_card(&self, item: PerfItem, t: &Theme) -> Div<Self> {
+    fn perf_card(&self, item: PerfItem, cx: &Cx, t: &Theme) -> Div<Self> {
         let selected = self.perf_item == item;
         let color = self.perf_color(item, t);
         let (title, summary, values, max) = self.perf_summary(item);
@@ -114,20 +113,20 @@ impl TaskManager {
             .w(70.0)
             .h(46.0)
             .shrink_0();
-        let mut lines = div().flex_col().flex_1().min_w_0().gap(1.0).child(text(title).size(14.0).weight(Weight::Medium).truncate());
+        let mut lines = div().flex_col().flex_1().min_w_0().gap(1.0).child(text(title).weight(Weight::Medium).truncate());
         for l in summary.lines() {
-            lines = lines.child(text(l.to_string()).size(11.0).color(t.text_secondary).truncate());
+            lines = lines.child(text(l.to_string()).size(11.0).tabular().color(t.text_secondary).truncate());
         }
         div()
             .id(("perf-item", format!("{item:?}")))
-            .h(66.0)
+            .h(64.0)
+            .shrink_0()
             .px(8.0)
             .rounded(8.0)
             .flex_row()
             .items_center()
-            .gap(10.0)
-            .bg_opt(selected.then_some(t.sidebar_selection))
-            .hover_bg(if selected { t.sidebar_selection } else { t.hover })
+            .gap(12.0)
+            .bg_opt(selected.then_some(native::sidebar_selection(cx)))
             .on_mouse_down(move |s: &mut Self, cx: &mut Cx| {
                 s.perf_item = item;
                 cx.focus("table");
@@ -148,16 +147,17 @@ impl TaskManager {
                 div()
                     .flex_row()
                     .justify_between()
-                    .child(text(caption.to_string()).size(11.0).color(t.text_secondary))
-                    .child(text(top.to_string()).size(11.0).color(t.text_secondary)),
+                    .gap(12.0)
+                    .child(text(caption.to_string()).size(11.0).color(t.text_secondary).truncate())
+                    .child(text(top.to_string()).size(11.0).tabular().color(t.text_secondary).shrink_0()),
             )
             .child(g)
             .child(
                 div()
                     .flex_row()
                     .justify_between()
-                    .child(text("60 seconds").size(11.0).color(t.text_secondary))
-                    .child(text("0").size(11.0).color(t.text_secondary)),
+                    .child(text("60 seconds").size(11.0).tabular().color(t.text_secondary))
+                    .child(text("0").size(11.0).tabular().color(t.text_secondary)),
             );
         d = d.flex_1();
         d.layout_mut().flex_grow = flex;
@@ -169,19 +169,19 @@ impl TaskManager {
             .flex_col()
             .gap(1.0)
             .w(128.0)
-            .child(text(label.to_string()).size(11.0).color(t.text_secondary))
-            .child(text(value).size(19.0))
+            .child(text(label.to_string()).size(11.0).color(t.text_secondary).truncate())
+            .child(text(value).size(20.0).tabular())
     }
 
     fn facts(rows: Vec<(&str, String)>, t: &Theme) -> Div<Self> {
-        let mut d = div().flex_col().gap(4.0).w(270.0).shrink_0();
+        let mut d = div().flex_col().gap(4.0).w(272.0).shrink_0();
         for (k, v) in rows {
             d = d.child(
                 div()
                     .flex_row()
-                    .gap(10.0)
-                    .child(text(k.to_string()).size(12.0).color(t.text_secondary).w(130.0).shrink_0())
-                    .child(text(v).size(12.0).truncate()),
+                    .gap(12.0)
+                    .child(text(k.to_string()).size(11.0).color(t.text_secondary).w(128.0).shrink_0().truncate())
+                    .child(text(v).size(11.0).tabular().truncate()),
             );
         }
         d
@@ -318,17 +318,17 @@ impl TaskManager {
         let mut stat_grid = div().flex_col().gap(12.0).flex_1().min_w_0();
         let mut stats = stats.into_iter().peekable();
         while stats.peek().is_some() {
-            stat_grid = stat_grid.child(div().flex_row().gap(18.0).children(stats.by_ref().take(3)));
+            stat_grid = stat_grid.child(div().flex_row().gap(16.0).children(stats.by_ref().take(3)));
         }
         div()
             .flex_1()
             .min_w_0()
             .h_full()
             .flex_col()
-            .gap(14.0)
+            .gap(16.0)
             .px(24.0)
             .pt(16.0)
-            .pb(18.0)
+            .pb(16.0)
             .child(
                 div()
                     .flex_row()
@@ -336,7 +336,7 @@ impl TaskManager {
                     .justify_between()
                     .gap(16.0)
                     .child(text(title).size(24.0).weight(Weight::Bold).shrink_0())
-                    .child(text(subtitle).size(14.0).color(t.text_secondary).truncate().mb(3.0)),
+                    .child(text(subtitle).color(t.text_secondary).truncate().mb(4.0)),
             )
             .children(graphs)
             .child(div().flex_row().gap(24.0).shrink_0().child(stat_grid).child(Self::facts(facts, t)))

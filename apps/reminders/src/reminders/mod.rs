@@ -13,17 +13,21 @@ use model::{DEFAULT_LIST, Due, List, Priority, Reminder, Section, Smart, Store, 
 use reminders_core::{COLORS, DOC, color_rgb};
 use sync_ui::{Pairing, PairingHost, SyncEvents};
 use theme::Theme;
+use ui::widgets::{Menu, MenuItem, MenuKey};
 use ui::*;
 
+/// Wider than the shared sidebar, as in Reminders, to fit two smart-list
+/// tiles side by side.
 const SIDEBAR_W: f32 = 240.0;
-const TOOLBAR_H: f32 = 52.0;
+/// My Lists' colored circles (bigger than a plain sidebar icon).
+const LIST_ICON: f32 = 20.0;
 const SAVE_DELAY: Duration = Duration::from_millis(600);
 /// Subtasks are indented by the width of a completion circle and its gap.
 const INDENT: f32 = 30.0;
 const POPOVER_W: f32 = 320.0;
 const POPOVER_H: f32 = 396.0;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 enum MenuAction {
     NewReminder,
     NewList,
@@ -37,20 +41,6 @@ enum MenuAction {
     Outdent(u64),
     ShowInfo(u64),
     Delete(u64),
-}
-
-struct MenuItem {
-    label: String,
-    /// A color swatch shown before the label.
-    swatch: Option<u32>,
-    checked: bool,
-    /// `None` draws a separator.
-    action: Option<MenuAction>,
-}
-
-struct Menu {
-    pos: Point,
-    items: Vec<MenuItem>,
 }
 
 /// Which line of the reminder being edited has the caret.
@@ -78,7 +68,7 @@ pub struct RemindersApp {
     show_completed: bool,
     /// Checked off since this view opened: they stay until the user moves on.
     keep: HashSet<u64>,
-    menu: Option<Menu>,
+    menu: Option<Menu<MenuAction>>,
     dirty_since: Option<Instant>,
     events: Option<Arc<SyncEvents>>,
     pairing: Pairing,
@@ -186,6 +176,7 @@ impl RemindersApp {
     pub fn search_for(&mut self, q: &str, cx: &mut Cx) {
         self.search.borrow_mut().set_text(&mut cx.text.fonts, q);
         self.query = q.to_string();
+        cx.focus("search");
     }
 
     /// Opens the details of the first reminder in view that has notes.
@@ -195,6 +186,24 @@ impl RemindersApp {
         if let Some(id) = id {
             self.open_details(id, cx);
         }
+    }
+
+    /// Opens the second reminder's context menu (or the current list's),
+    /// with the pointer over a row.
+    pub fn menu_preview(&mut self, list: bool, cx: &mut Cx) {
+        if list {
+            let id = match self.view {
+                View::List(l) => l,
+                View::Smart(_) => self.target_list(),
+            };
+            cx.mouse = Point { x: 150.0, y: 350.0 };
+            self.list_menu(id, cx);
+        } else if let Some(&id) = self.visible_ids().get(1) {
+            cx.mouse = Point { x: 420.0, y: 190.0 };
+            self.reminder_menu(id, cx);
+        }
+        cx.mouse.x += 30.0;
+        cx.mouse.y += 5.0 + 24.0 * 3.0 + 11.0 + 12.0;
     }
 
     /// Edits the second reminder in view.
@@ -532,42 +541,42 @@ impl RemindersApp {
         }
         self.selected = Some(id);
         let Some(r) = self.store.get(id).cloned() else { return };
-        let item = |label: &str, a: MenuAction| MenuItem { label: label.into(), swatch: None, checked: false, action: Some(a) };
-        let sep = || MenuItem { label: String::new(), swatch: None, checked: false, action: None };
         let mut items = vec![
-            item("Show Info", MenuAction::ShowInfo(id)),
-            item(if r.flagged { "Unflag" } else { "Flag" }, MenuAction::Flag(id, !r.flagged)),
-            sep(),
+            MenuItem::new("Show Info", MenuAction::ShowInfo(id)).shortcut("Ctrl+I"),
+            MenuItem::new(if r.flagged { "Unflag" } else { "Flag" }, MenuAction::Flag(id, !r.flagged)),
+            MenuItem::separator(),
         ];
         for (p, label) in [(Priority::None, "No Priority"), (Priority::Low, "Low Priority"), (Priority::Medium, "Medium Priority"), (Priority::High, "High Priority")] {
-            items.push(MenuItem { checked: r.priority == p, ..item(label, MenuAction::Priority(id, p)) });
+            items.push(MenuItem::new(label, MenuAction::Priority(id, p)).checked(r.priority == p));
         }
-        items.push(sep());
+        items.push(MenuItem::separator());
         if r.parent.is_some() {
-            items.push(item("Outdent Reminder", MenuAction::Outdent(id)));
+            items.push(MenuItem::new("Outdent Reminder", MenuAction::Outdent(id)).shortcut("Shift+Tab"));
         } else if self.store.children(id).next().is_none() {
-            items.push(item("Indent Reminder", MenuAction::Indent(id)));
+            items.push(MenuItem::new("Indent Reminder", MenuAction::Indent(id)).shortcut("Tab"));
         }
-        items.push(item("Delete", MenuAction::Delete(id)));
-        self.menu = Some(Menu { pos: cx.mouse, items });
+        items.push(MenuItem::new("Delete", MenuAction::Delete(id)).shortcut("Delete"));
+        self.menu = Some(Menu::new(cx.mouse, items));
     }
 
     fn list_menu(&mut self, id: u64, cx: &mut Cx) {
-        let item = |label: &str, a: MenuAction| MenuItem { label: label.into(), swatch: None, checked: false, action: Some(a) };
         let current = self.store.list(id).map(|l| l.color.clone()).unwrap_or_default();
-        let mut items = vec![item("New Reminder", MenuAction::NewReminder), item("New List", MenuAction::NewList)];
-        items.push(MenuItem { label: String::new(), swatch: None, checked: false, action: None });
-        items.push(item("Rename List", MenuAction::RenameList(id)));
+        let mut items = vec![
+            MenuItem::new("New Reminder", MenuAction::NewReminder).shortcut("Ctrl+N"),
+            MenuItem::new("New List", MenuAction::NewList).shortcut("Ctrl+Shift+N"),
+            MenuItem::separator(),
+            MenuItem::new("Rename List", MenuAction::RenameList(id)),
+        ];
         if self.store.lists.len() > 1 {
-            items.push(item("Delete List", MenuAction::DeleteList(id)));
+            items.push(MenuItem::new("Delete List", MenuAction::DeleteList(id)));
         }
-        items.push(MenuItem { label: String::new(), swatch: None, checked: false, action: None });
+        items.push(MenuItem::separator());
         for c in COLORS {
             let mut label = c.to_string();
             label[..1].make_ascii_uppercase();
-            items.push(MenuItem { label, swatch: Some(color_rgb(c)), checked: current == c, action: Some(MenuAction::ListColor(id, c)) });
+            items.push(MenuItem::new(label, MenuAction::ListColor(id, c)).checked(current == c).swatch(rgb(color_rgb(c))));
         }
-        self.menu = Some(Menu { pos: cx.mouse, items });
+        self.menu = Some(Menu::new(cx.mouse, items));
     }
 
     fn move_menu(&mut self, id: u64, cx: &mut Cx) {
@@ -576,14 +585,12 @@ impl RemindersApp {
             .store
             .lists
             .iter()
-            .map(|l| MenuItem {
-                label: l.name.clone(),
-                swatch: Some(color_rgb(&l.color)),
-                checked: l.id == current,
-                action: Some(MenuAction::MoveTo(id, l.id)),
+            .map(|l| {
+                let swatch = rgb(self.store.list_color(l.id));
+                MenuItem::new(l.name.clone(), MenuAction::MoveTo(id, l.id)).checked(l.id == current).swatch(swatch)
             })
             .collect();
-        self.menu = Some(Menu { pos: cx.mouse, items });
+        self.menu = Some(Menu::new(cx.mouse, items));
     }
 
     // -- rendering ----------------------------------------------------------
@@ -618,13 +625,18 @@ impl RemindersApp {
         }
     }
 
+    /// A 32×28 toolbar button: hover fill, darker while pressed, lighter
+    /// in an inactive window.
     fn icon_button(
         id: &'static str,
+        cx: &Cx,
         t: &Theme,
         color: Color,
         icon: fn(&mut Scene, Bounds, Color),
         on_click: impl Fn(&mut Self, &mut Cx) + 'static,
     ) -> Div<Self> {
+        let color = native::toolbar_ink(cx, color);
+        let pressed = cx.hovered(id) && cx.mouse_down;
         div()
             .id(id)
             .w(32.0)
@@ -632,13 +644,14 @@ impl RemindersApp {
             .rounded(6.0)
             .items_center()
             .justify_center()
-            .hover_bg(t.icon_hover_bg)
+            .bg_opt(pressed.then_some(t.icon_pressed_bg))
+            .hover_bg(if pressed { t.icon_pressed_bg } else { t.icon_hover_bg })
             .on_click(on_click)
             .child(canvas(move |s, b| icon(s, b, color)).size(20.0))
     }
 
     fn sidebar(&self, cx: &Cx, t: &Theme) -> Div<Self> {
-        let mut header = div().h(TOOLBAR_H).shrink_0().flex_row().items_center().px(20.0).window_drag();
+        let mut header = div().h(native::TOOLBAR_H).shrink_0().flex_row().items_center().px(native::TRAFFIC_LIGHTS_X).window_drag();
         if let Some(buttons) = ui::chrome::window_buttons(true, cx, t.text) {
             header = header.child(buttons);
         }
@@ -647,11 +660,12 @@ impl RemindersApp {
         let query_set = !self.query.is_empty();
         let search = div()
             .id("search-box")
-            .mx(10.0)
+            .mx(native::SIDEBAR_INSET)
             .h(28.0)
             .shrink_0()
             .rounded(7.0)
             .bg(t.field)
+            .focus_ring(cx.is_focused("search"), cx)
             .flex_row()
             .items_center()
             .gap(6.0)
@@ -664,11 +678,12 @@ impl RemindersApp {
             .child(canvas(move |s, b| icons::magnifier(s, b, icon_c)).size(14.0).shrink_0())
             .child(input("search", &self.search).flex_1())
             .child_if(query_set, || {
+                let pressed = cx.hovered("search-clear") && cx.mouse_down;
                 div()
                     .id("search-clear")
                     .size(16.0)
                     .rounded(8.0)
-                    .bg(icon_c.alpha(0.5))
+                    .bg(icon_c.alpha(if pressed { 0.8 } else { 0.5 }))
                     .shrink_0()
                     .on_click(|s: &mut Self, cx: &mut Cx| {
                         s.query.clear();
@@ -684,38 +699,32 @@ impl RemindersApp {
         let grid = div()
             .flex_col()
             .gap(8.0)
-            .px(10.0)
+            .px(native::SIDEBAR_INSET)
             .pt(12.0)
             .shrink_0()
             .child(div().flex_row().gap(8.0).child(tile(Smart::Today)).child(tile(Smart::Scheduled)))
             .child(div().flex_row().gap(8.0).child(tile(Smart::All)).child(tile(Smart::Flagged)))
             .child(div().flex_row().gap(8.0).child(tile(Smart::Completed)).child(div().flex_1()));
 
-        let mut rows: Vec<AnyElement<Self>> = vec![
-            div()
-                .pl(8.0)
-                .pt(20.0)
-                .pb(6.0)
-                .child(text("My Lists").size(11.0).weight(Weight::Semibold).color(t.text_secondary))
-                .into(),
-        ];
+        let mut rows: Vec<AnyElement<Self>> = vec![native::sidebar_header("My Lists", cx).pt(20.0).into()];
         for l in &self.store.lists {
-            rows.push(self.list_row(l, t).into());
+            rows.push(self.list_row(l, cx, t).into());
         }
 
-        let accent = t.text_secondary;
+        // "⊕ Add List" at the bottom, lined up with the sidebar's icons.
+        let pressed = cx.hovered("add-list") && cx.mouse_down;
+        let ink = if pressed { t.text } else { t.text_secondary };
         let add_list = div()
             .id("add-list")
             .h(40.0)
             .shrink_0()
             .flex_row()
             .items_center()
-            .gap(6.0)
-            .px(18.0)
-            .cursor(CursorIcon::Pointer)
+            .gap(8.0)
+            .px(native::SIDEBAR_INSET + native::SIDEBAR_ROW_PAD)
             .on_click(|s: &mut Self, cx: &mut Cx| s.new_list(cx))
-            .child(canvas(move |s, b| icons::plus_circle(s, b, accent)).size(18.0))
-            .child(text("Add List").color(t.text_secondary));
+            .child(canvas(move |s, b| icons::plus_circle(s, b, ink)).size(native::SIDEBAR_ICON).shrink_0())
+            .child(text("Add List").color(ink).truncate());
 
         div()
             .w(SIDEBAR_W)
@@ -732,7 +741,7 @@ impl RemindersApp {
                     .flex_1()
                     .flex_col()
                     .child(grid)
-                    .child(div().flex_col().px(10.0).gap(1.0).pb(8.0).children(rows)),
+                    .child(div().flex_col().gap(1.0).pb(8.0).children(rows)),
             )
             .child(self.pairing.sidebar_row(&Self::sync_colors(t)))
             .child(add_list)
@@ -780,28 +789,30 @@ impl RemindersApp {
                             .justify_center()
                             .child(canvas(move |s, b| icon(s, b, glyph)).size(16.0)),
                     )
-                    .child(text(count.to_string()).size(20.0).weight(Weight::Bold).color(ink)),
+                    .child(text(count.to_string()).size(20.0).weight(Weight::Bold).tabular().color(ink)),
             )
-            .child(text(smart.name()).size(13.0).weight(Weight::Semibold).color(name_ink));
+            .child(text(smart.name()).size(13.0).weight(Weight::Semibold).color(name_ink).truncate());
         if !t.dark && !selected {
             tile = tile.shadow(rgba(0x000000, 0.08), 2.0, 0.5);
         }
         tile
     }
 
-    fn list_row(&self, l: &List, t: &Theme) -> Div<Self> {
+    fn list_row(&self, l: &List, cx: &Cx, t: &Theme) -> Div<Self> {
         let id = l.id;
         let selected = self.view == View::List(id) && !self.searching();
         let c = rgb(color_rgb(&l.color));
         let name: AnyElement<Self> = if self.renaming == Some(id) {
             div()
                 .flex_1()
-                .h(20.0)
+                .min_w_0()
+                .h(22.0)
                 .px(4.0)
                 .items_center()
                 .rounded(4.0)
                 .bg(t.content)
-                .border(t.accent, 1.5)
+                .border(t.divider, 0.5)
+                .focus_ring(cx.is_focused("rename"), cx)
                 .child(input("rename", &self.rename).flex_1())
                 .into()
         } else {
@@ -809,14 +820,16 @@ impl RemindersApp {
         };
         div()
             .id(("list", id))
-            .h(32.0)
+            .h(native::SIDEBAR_ROW_H)
             .shrink_0()
-            .px(6.0)
-            .rounded(6.0)
+            .mx(native::SIDEBAR_INSET)
+            .pl(native::SIDEBAR_ROW_PAD - (LIST_ICON - native::SIDEBAR_ICON) / 2.0)
+            .pr(native::SIDEBAR_ROW_PAD)
+            .rounded(native::SIDEBAR_RADIUS)
             .flex_row()
             .items_center()
-            .gap(8.0)
-            .bg_opt(selected.then_some(t.sidebar_selection))
+            .gap(6.0)
+            .bg_opt(selected.then_some(native::sidebar_selection(cx)))
             .on_mouse_down(move |s: &mut Self, cx: &mut Cx| {
                 if s.renaming.is_some_and(|r| r != id) {
                     s.finish_rename(true, cx);
@@ -829,16 +842,16 @@ impl RemindersApp {
             .on_right_click(move |s: &mut Self, cx: &mut Cx| s.list_menu(id, cx))
             .child(
                 div()
-                    .size(24.0)
-                    .rounded(12.0)
+                    .size(LIST_ICON)
+                    .rounded(LIST_ICON / 2.0)
                     .bg(c)
                     .shrink_0()
                     .items_center()
                     .justify_center()
-                    .child(canvas(|s, b| icons::bullets(s, b, Color::WHITE)).size(14.0)),
+                    .child(canvas(|s, b| icons::bullets(s, b, Color::WHITE)).size(12.0)),
             )
             .child(name)
-            .child(text(self.store.count_in(id).to_string()).color(t.text_secondary).shrink_0())
+            .child(text(self.store.count_in(id).to_string()).tabular().color(t.text_secondary).shrink_0())
     }
 
     fn content(&self, cx: &Cx, t: &Theme) -> Div<Self> {
@@ -846,24 +859,25 @@ impl RemindersApp {
         let can_add = self.view != View::Smart(Smart::Completed);
         let completed_on = self.show_completed;
         let toggle_c = if completed_on { t.accent } else { t.icon };
-        let mut tools = div().flex_row().items_center().gap(2.0).child(Self::icon_button(
+        let mut tools = div().flex_row().items_center().gap(4.0).child(Self::icon_button(
             "toggle-completed",
+            cx,
             t,
             toggle_c,
             icons::check_circle,
             |s: &mut Self, _: &mut Cx| s.show_completed = !s.show_completed,
         ));
         if can_add {
-            tools = tools.child(Self::icon_button("add", t, t.icon, icons::plus, |s: &mut Self, cx: &mut Cx| s.new_reminder(None, cx)));
+            tools = tools.child(Self::icon_button("add", cx, t, t.icon, icons::plus, |s: &mut Self, cx: &mut Cx| s.new_reminder(None, cx)));
         }
         let toolbar = div()
-            .h(TOOLBAR_H)
+            .h(native::TOOLBAR_H)
             .shrink_0()
             .flex_row()
             .items_center()
             .justify_end()
             .gap(10.0)
-            .px(12.0)
+            .px(10.0)
             .window_drag()
             .child(tools)
             .children(ui::chrome::window_buttons(false, cx, t.text));
@@ -882,7 +896,7 @@ impl RemindersApp {
             .pb(2.0)
             .shrink_0()
             .child(text(self.view_name()).size(26.0).weight(Weight::Bold).color(color).truncate().flex_1())
-            .child(text(count.to_string()).size(26.0).weight(Weight::Medium).color(color).shrink_0());
+            .child(text(count.to_string()).size(26.0).weight(Weight::Medium).tabular().color(color).shrink_0());
 
         // "3 Completed · Show", under a list's title.
         let done_here = match (self.searching(), self.view) {
@@ -897,7 +911,7 @@ impl RemindersApp {
             .px(22.0)
             .h(20.0)
             .shrink_0()
-            .child_if(done_here > 0, || text(format!("{done_here} Completed \u{2022}")).size(12.0).color(t.text_secondary).into())
+            .child_if(done_here > 0, || text(format!("{done_here} Completed \u{2022}")).size(12.0).tabular().color(t.text_secondary).into())
             .child_if(done_here > 0, || {
                 div()
                     .id("show-completed")
@@ -909,7 +923,7 @@ impl RemindersApp {
 
         let sections = self.sections();
         let mut body: Vec<AnyElement<Self>> = Vec::new();
-        let sel_focused = cx.is_focused("list") || cx.is_focused("title") || cx.is_focused("notes");
+        let sel_focused = (cx.is_focused("list") || cx.is_focused("title") || cx.is_focused("notes")) && cx.window_focused;
         for sec in &sections {
             if let Some(title) = &sec.title {
                 let c = sec.color.map_or(t.text, rgb);
@@ -925,9 +939,11 @@ impl RemindersApp {
                         .into(),
                 );
             }
+            let highlighted = |id: u64| self.selected == Some(id) || self.details == Some(id);
             for (i, row) in sec.rows.iter().enumerate() {
                 let Some(r) = self.store.get(row.id) else { continue };
-                let last = i + 1 == sec.rows.len();
+                // No separator under the last row, or touching a selected one.
+                let last = i + 1 == sec.rows.len() || highlighted(row.id) || sec.rows.get(i + 1).is_some_and(|n| highlighted(n.id));
                 body.push(self.reminder_row(r, row.depth, last, sel_focused, cx, t).into());
             }
         }
@@ -942,10 +958,10 @@ impl RemindersApp {
             };
             body.push(
                 div()
-                    .h(220.0)
+                    .h(240.0)
                     .items_center()
                     .justify_center()
-                    .child(text(msg).size(16.0).color(t.text_tertiary))
+                    .child(text(msg).size(15.0).weight(Weight::Medium).color(t.text_tertiary))
                     .into(),
             );
         }
@@ -1025,7 +1041,7 @@ impl RemindersApp {
         let mut has_meta = false;
         if let Some(due) = r.due {
             let late = !done && due.is_overdue(now());
-            meta = meta.child(text(due_text(due, today)).size(12.0).color(if late { t.destructive } else { t.text_secondary }));
+            meta = meta.child(text(due_text(due, today)).size(12.0).tabular().color(if late { t.destructive } else { t.text_secondary }));
             has_meta = true;
         }
         // Smart lists say which list a reminder is in.
@@ -1159,7 +1175,7 @@ impl RemindersApp {
                     .on_click(move |s: &mut Self, _: &mut Cx| back(s, -1))
                     .child(canvas(move |s, b| icons::chevron_left(s, b, ink)).size(16.0)),
             )
-            .child(div().flex_1().items_center().justify_center().child(text(value).size(12.5)))
+            .child(div().flex_1().min_w_0().items_center().justify_center().child(text(value).size(13.0).tabular().truncate()))
             .child(
                 div()
                     .id((id, 1))
@@ -1208,6 +1224,7 @@ impl RemindersApp {
                     .min_h(52.0)
                     .rounded(6.0)
                     .bg(t.field)
+                    .focus_ring(cx.is_focused("details-notes"), cx)
                     .px(8.0)
                     .py(6.0)
                     .cursor(CursorIcon::Text)
@@ -1304,61 +1321,6 @@ impl RemindersApp {
                 .child(ui::widgets::popover(cx, anchor, POPOVER_W, POPOVER_H, t.popover, t.menu_border, t.shadow, card)),
         )
     }
-
-    fn menu_overlay(&self, menu: &Menu, cx: &Cx, t: &Theme) -> Div<Self> {
-        let (w, h) = cx.window_size;
-        let width = 200.0;
-        let est_h: f32 = 10.0 + menu.items.iter().map(|i| if i.action.is_some() { 24.0 } else { 9.0 }).sum::<f32>();
-        let x = menu.pos.x.min(w - width - 6.0).max(6.0);
-        let y = if menu.pos.y + est_h > h - 6.0 { (menu.pos.y - est_h).max(6.0) } else { menu.pos.y };
-
-        let mut panel = div()
-            .absolute(x, y)
-            .w(width)
-            .flex_col()
-            .p(5.0)
-            .rounded(8.0)
-            .bg(t.menu_bg)
-            .border(t.menu_border, 0.5)
-            .shadow(t.shadow, 14.0, 6.0)
-            .occlude();
-        for (i, item) in menu.items.iter().enumerate() {
-            match &item.action {
-                None => panel = panel.child(div().h(1.0).mt(4.0).mb(4.0).px(6.0).child(div().flex_1().h(1.0).bg(t.menu_border))),
-                Some(action) => {
-                    let hovered = cx.hovered(("menu-item", i));
-                    let ink = if hovered { Color::WHITE } else { t.text };
-                    let action = action.clone();
-                    let mut row = div()
-                        .id(("menu-item", i))
-                        .h(24.0)
-                        .px(8.0)
-                        .rounded(5.0)
-                        .flex_row()
-                        .items_center()
-                        .gap(6.0)
-                        .hover_bg(t.menu_highlight)
-                        .on_click(move |s: &mut Self, cx: &mut Cx| s.run_menu(action.clone(), cx))
-                        .child(
-                            div()
-                                .w(12.0)
-                                .shrink_0()
-                                .child_if(item.checked, || canvas(move |s, b| icons::check(s, b, ink, 1.6)).size(12.0).into()),
-                        );
-                    if let Some(c) = item.swatch {
-                        row = row.child(div().size(10.0).rounded(5.0).bg(rgb(c)).shrink_0());
-                    }
-                    panel = panel.child(row.child(text(item.label.clone()).color(ink).truncate()));
-                }
-            }
-        }
-        div()
-            .inset_0()
-            .deferred()
-            .on_mouse_down(|s: &mut Self, _| s.menu = None)
-            .on_right_click(|s: &mut Self, _| s.menu = None)
-            .child(panel)
-    }
 }
 
 impl PairingHost for RemindersApp {
@@ -1389,7 +1351,7 @@ impl App for RemindersApp {
             root = root.child(pop);
         }
         if let Some(menu) = &self.menu {
-            root = root.child(self.menu_overlay(menu, cx, &t));
+            root = root.child(menu.render(cx, |s: &mut Self, a, cx| s.run_menu(a, cx), |s: &mut Self, _| s.menu = None));
         }
         if let Some(sheet) = self.pairing.sheet(cx, &Self::sync_colors(&t)) {
             root = root.child(sheet);
@@ -1406,8 +1368,16 @@ impl App for RemindersApp {
         if self.pairing.on_key(key) {
             return true;
         }
+        if let Some(menu) = &mut self.menu {
+            match menu.key(key, cx) {
+                MenuKey::Pick(a) => self.run_menu(a, cx),
+                MenuKey::Close => self.menu = None,
+                MenuKey::Stay => {}
+            }
+            return true;
+        }
         if key.is_named(NamedKey::Escape) {
-            if self.menu.take().is_some() || self.details.take().is_some() {
+            if self.details.take().is_some() {
             } else if self.renaming.is_some() {
                 self.finish_rename(false, cx);
             } else if self.editing.is_some() {
@@ -1417,9 +1387,6 @@ impl App for RemindersApp {
                 self.search.borrow_mut().set_text(&mut cx.text.fonts, "");
                 cx.focus("list");
             }
-            return true;
-        }
-        if self.menu.is_some() {
             return true;
         }
         if key.ctrl && !key.alt {
@@ -1718,6 +1685,20 @@ mod tests {
             assert_eq!(app.sections()[0].rows.len(), 4);
             app.run_menu(MenuAction::Priority(id, Priority::High), cx);
             assert_eq!(app.store.get(id).unwrap().priority, Priority::High);
+
+            // The context menu works from the keyboard: typing jumps to a
+            // row, Return picks it, Escape closes only the menu.
+            app.reminder_menu(id, cx);
+            let l = KeyPress { key: Key::Character("l".into()), text: Some("l".into()), ctrl: false, shift: false, alt: false };
+            assert!(app.on_key(&l, cx));
+            press(app, cx, NamedKey::Enter, false);
+            assert!(app.menu.is_none());
+            assert_eq!(app.store.get(id).unwrap().priority, Priority::Low);
+            app.reminder_menu(id, cx);
+            press(app, cx, NamedKey::ArrowDown, false);
+            press(app, cx, NamedKey::Escape, false);
+            assert!(app.menu.is_none() && app.details == Some(id));
+            assert!(app.store.get(id).unwrap().flagged);
         });
         assert!(path.exists());
     }

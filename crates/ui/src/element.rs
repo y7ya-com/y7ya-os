@@ -79,6 +79,7 @@ pub struct Div<S> {
     pub(crate) on_mouse_down: Option<Handler<S>>,
     pub(crate) on_click: Option<Handler<S>>,
     pub(crate) on_right_click: Option<Handler<S>>,
+    pub(crate) on_middle_click: Option<Handler<S>>,
     pub(crate) on_double_click: Option<Handler<S>>,
     pub(crate) window_drag: bool,
     pub(crate) focusable: bool,
@@ -86,6 +87,8 @@ pub struct Div<S> {
     pub(crate) clip: bool,
     pub(crate) deferred: bool,
     pub(crate) occlude: bool,
+    /// Scales the alpha of everything the div paints (see `opacity.rs`).
+    pub(crate) opacity: f32,
 }
 
 pub fn div<S>() -> Div<S> {
@@ -104,6 +107,7 @@ pub fn div<S>() -> Div<S> {
         on_mouse_down: None,
         on_click: None,
         on_right_click: None,
+        on_middle_click: None,
         on_double_click: None,
         window_drag: false,
         focusable: false,
@@ -111,6 +115,7 @@ pub fn div<S>() -> Div<S> {
         clip: false,
         deferred: false,
         occlude: false,
+        opacity: 1.0,
     }
 }
 
@@ -360,6 +365,10 @@ impl<S> Div<S> {
         self.on_right_click = Some(Rc::new(f));
         self
     }
+    pub fn on_middle_click(mut self, f: impl Fn(&mut S, &mut Cx) + 'static) -> Self {
+        self.on_middle_click = Some(Rc::new(f));
+        self
+    }
     pub fn on_double_click(mut self, f: impl Fn(&mut S, &mut Cx) + 'static) -> Self {
         self.on_double_click = Some(Rc::new(f));
         self
@@ -522,6 +531,7 @@ pub struct Hitbox<S> {
     pub on_mouse_down: Option<Handler<S>>,
     pub on_click: Option<Handler<S>>,
     pub on_right_click: Option<Handler<S>>,
+    pub on_middle_click: Option<Handler<S>>,
     pub on_double_click: Option<Handler<S>>,
     pub window_drag: bool,
     pub focusable: bool,
@@ -728,6 +738,7 @@ fn paint<'e, S>(
                 on_mouse_down: None,
                 on_click: None,
                 on_right_click: None,
+                on_middle_click: None,
                 on_double_click: None,
                 window_drag: false,
                 focusable: true,
@@ -755,6 +766,7 @@ fn paint<'e, S>(
                 on_mouse_down: None,
                 on_click: None,
                 on_right_click: None,
+                on_middle_click: None,
                 on_double_click: None,
                 window_drag: false,
                 focusable: true,
@@ -778,6 +790,7 @@ fn paint_div<'e, S>(
     let b = abs_bounds(pcx.tree, node, origin);
     let style = d.text.apply(style);
     let hovered = d.id.is_some_and(|id| pcx.cx.is_hovered(id));
+    let faded = (d.opacity < 1.0).then(|| pcx.scene.mark());
 
     if let Some((c, blur, dy)) = d.shadow {
         pcx.scene.shadow(Bounds::new(b.x, b.y + dy, b.w, b.h), c, d.radius, blur);
@@ -799,6 +812,7 @@ fn paint_div<'e, S>(
     let interactive = d.on_mouse_down.is_some()
         || d.on_click.is_some()
         || d.on_right_click.is_some()
+        || d.on_middle_click.is_some()
         || d.on_double_click.is_some()
         || d.window_drag
         || d.focusable
@@ -814,6 +828,7 @@ fn paint_div<'e, S>(
             on_mouse_down: d.on_mouse_down.clone(),
             on_click: d.on_click.clone(),
             on_right_click: d.on_right_click.clone(),
+            on_middle_click: d.on_middle_click.clone(),
             on_double_click: d.on_double_click.clone(),
             window_drag: d.window_drag,
             focusable: d.focusable,
@@ -853,5 +868,8 @@ fn paint_div<'e, S>(
     }
     if d.clip {
         pcx.scene.pop_clip();
+    }
+    if let Some(mark) = faded {
+        pcx.scene.fade_since(mark, d.opacity);
     }
 }

@@ -25,7 +25,7 @@ use sctk::reexports::client::protocol::{wl_keyboard, wl_output, wl_pointer, wl_s
 use sctk::reexports::client::{Connection, Proxy, QueueHandle};
 use sctk::registry::{ProvidesRegistryState, RegistryState};
 use sctk::seat::keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers};
-use sctk::seat::pointer::{BTN_LEFT, BTN_RIGHT, PointerEvent, PointerEventKind, PointerHandler, ThemeSpec, ThemedPointer};
+use sctk::seat::pointer::{BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, PointerEvent, PointerEventKind, PointerHandler, ThemeSpec, ThemedPointer};
 use sctk::seat::{Capability, SeatHandler, SeatState};
 use sctk::shell::WaylandSurface;
 use sctk::shell::wlr_layer::{self as wlr, LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure};
@@ -139,6 +139,7 @@ pub fn run_layer<A: App>(opts: LayerOptions, make: impl FnOnce(&mut Cx) -> A + '
     runner.cx.waker = crate::cx::Waker(None, Some(Arc::new(move || ping.ping())));
     runner.cx.dark = super::system_dark();
     runner.cx.transparent = true;
+    runner.cx.layers.conn = Some(conn.clone());
     // Learn the outputs (for their scale) and seats before the first surface.
     queue.roundtrip(&mut runner).expect("wayland roundtrip");
 
@@ -152,11 +153,14 @@ pub fn run_layer<A: App>(opts: LayerOptions, make: impl FnOnce(&mut Cx) -> A + '
     runner.app = Some(make(&mut runner.cx));
     while !runner.exit {
         runner.tick();
+        // Drawing can read events too (wgpu waits on the compositor).
+        runner.poll_queues();
         let timeout = runner.timeout();
         if let Err(e) = event_loop.dispatch(timeout, &mut runner) {
             eprintln!("wayland: {e}");
             break;
         }
+        runner.poll_queues();
     }
     if let Some(app) = runner.app.as_mut() {
         app.on_exit();
@@ -175,6 +179,18 @@ impl<A: App> Runner<A> {
         self.cx.scale = s.scale as f32;
         self.cx.layers.current.clone_from(&s.opts.namespace);
         self.cx.window_focused = self.keyboard_on.as_ref() == Some(s.layer.wl_surface());
+    }
+
+    /// Runs the app's own event queues on what was just read (see
+    /// [`Cx::poll_after_events`]); any that changed something wake the app.
+    fn poll_queues(&mut self) {
+        let mut pollers = std::mem::take(&mut self.cx.layers.pollers);
+        let woke = pollers.iter_mut().fold(false, |woke, p| p() || woke);
+        pollers.append(&mut self.cx.layers.pollers);
+        self.cx.layers.pollers = pollers;
+        if woke {
+            self.external();
+        }
     }
 
     fn external(&mut self) {
@@ -294,6 +310,7 @@ impl<A: App> Runner<A> {
             .max()
             .unwrap_or(1);
         self.cx.layers.shown.insert(opts.namespace.clone());
+        self.cx.layers.wl_surfaces.insert(opts.namespace.clone(), layer.wl_surface().clone());
         self.surfaces.push(Surface {
             target: None,
             layer,
@@ -322,6 +339,7 @@ impl<A: App> Runner<A> {
             self.keyboard_on = None;
         }
         self.cx.layers.shown.remove(&s.opts.namespace);
+        self.cx.layers.wl_surfaces.remove(&s.opts.namespace);
         drop(s);
     }
 
@@ -492,9 +510,10 @@ impl<A: App> Runner<A> {
         let frame = &self.surfaces[i].frame;
         self.cx.redraw = true;
 
-        if button == BTN_RIGHT {
-            let handler = frame.hits(p).into_iter().find(|h| h.on_right_click.is_some() || blocks(h));
-            if let Some(f) = handler.and_then(|h| h.on_right_click.clone()) {
+        if button == BTN_RIGHT || button == BTN_MIDDLE {
+            let pick = |h: &Hitbox<A>| if button == BTN_RIGHT { h.on_right_click.clone() } else { h.on_middle_click.clone() };
+            let handler = frame.hits(p).into_iter().find(|h| pick(h).is_some() || blocks(h));
+            if let Some(f) = handler.and_then(pick) {
                 f(app, &mut self.cx);
             }
             return;
@@ -593,6 +612,7 @@ fn blocks<S>(h: &Hitbox<S>) -> bool {
     h.on_mouse_down.is_none()
         && h.on_click.is_none()
         && h.on_right_click.is_none()
+        && h.on_middle_click.is_none()
         && h.on_double_click.is_none()
         && !h.window_drag
         && h.cursor.is_none()

@@ -124,6 +124,20 @@ impl Scene {
         });
     }
 
+    /// Where the next primitive will go, for [`Scene::fade_since`].
+    pub(crate) fn mark(&self) -> (usize, usize) {
+        (self.layer, self.layers.get(self.layer).map_or(0, Vec::len))
+    }
+
+    /// Scales the opacity of everything painted on `mark`'s layer since it.
+    pub(crate) fn fade_since(&mut self, (layer, start): (usize, usize), k: f32) {
+        let Some(list) = self.layers.get_mut(layer) else { return };
+        for inst in list.iter_mut().skip(start) {
+            inst.color = inst.color.map(|c| c * k);
+            inst.border_color = inst.border_color.map(|c| c * k);
+        }
+    }
+
     pub fn instances(&self) -> impl Iterator<Item = &Instance> {
         self.layers.iter().flatten()
     }

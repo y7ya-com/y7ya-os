@@ -95,6 +95,13 @@ pub(crate) struct LayerCx {
     pub(crate) current: String,
     pub(crate) commands: Vec<LayerCommand>,
     pub(crate) shown: HashSet<String>,
+    /// The runner's connection and each surface, for protocols the app speaks
+    /// itself about its surfaces (see [`Cx::layer_wl_surface`]).
+    #[cfg(target_os = "linux")]
+    pub(crate) conn: Option<wayland_client::Connection>,
+    #[cfg(target_os = "linux")]
+    pub(crate) wl_surfaces: std::collections::HashMap<String, wayland_client::protocol::wl_surface::WlSurface>,
+    pub(crate) pollers: Vec<Box<dyn FnMut() -> bool>>,
 }
 
 impl Cx {
@@ -121,6 +128,30 @@ impl Cx {
 
     pub fn layer_shown(&self, namespace: &str) -> bool {
         self.layers.shown.contains(namespace)
+    }
+
+    /// The Wayland connection the layer surfaces live on, so the app can bind
+    /// more protocols on it (in its own event queue).
+    #[cfg(target_os = "linux")]
+    pub fn wayland_connection(&self) -> Option<wayland_client::Connection> {
+        self.layers.conn.clone()
+    }
+
+    /// Runs `poll` on the UI thread after every batch of Wayland events, for
+    /// event queues the app made on [`Cx::wayland_connection`]: it should
+    /// `dispatch_pending` them and return true if that changed anything,
+    /// which runs the app's `on_external`. Don't read the connection from
+    /// another thread instead: whichever thread reads gets every queue's
+    /// events, and the UI thread wouldn't wake for its own.
+    pub fn poll_after_events(&mut self, poll: impl FnMut() -> bool + 'static) {
+        self.layers.pollers.push(Box::new(poll));
+    }
+
+    /// The `wl_surface` of a shown layer surface, once it exists (for
+    /// requests that name it, like a taskbar's minimize targets).
+    #[cfg(target_os = "linux")]
+    pub fn layer_wl_surface(&self, namespace: &str) -> Option<wayland_client::protocol::wl_surface::WlSurface> {
+        self.layers.wl_surfaces.get(namespace).cloned()
     }
 }
 

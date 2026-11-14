@@ -19,10 +19,10 @@ use media::{Kind, Loader};
 use places::{Mount, Places};
 use theme::Theme;
 use trash::Trash;
+use ui::native::{SIDEBAR_W, TOOLBAR_H};
+use ui::widgets::menu::{Menu, MenuItem, MenuKey};
 use ui::*;
 
-const SIDEBAR_W: f32 = 220.0;
-const TOOLBAR_H: f32 = 52.0;
 /// Transfers that finish sooner than this never show a progress panel.
 const PROGRESS_DELAY: Duration = Duration::from_millis(400);
 const TYPE_SELECT_RESET: Duration = Duration::from_millis(1000);
@@ -75,20 +75,6 @@ enum Action {
     View(ViewMode),
     Sort(SortKey),
     ToggleHidden,
-}
-
-struct MenuItem {
-    label: String,
-    /// `None` draws a separator.
-    action: Option<Action>,
-    enabled: bool,
-    checked: bool,
-    shortcut: &'static str,
-}
-
-struct Menu {
-    pos: Point,
-    items: Vec<MenuItem>,
 }
 
 enum Dialog {
@@ -191,7 +177,9 @@ pub struct FilesApp {
     rename: Rc<RefCell<TextInput>>,
     renaming: Option<PathBuf>,
     clipboard: Option<(Vec<PathBuf>, bool)>,
-    menu: Option<Menu>,
+    menu: Option<Menu<Action>>,
+    /// The open menu came from the toolbar's action button (drawn pressed meanwhile).
+    menu_from_toolbar: bool,
     dialog: Option<Dialog>,
     quicklook: Option<QuickLook>,
     previews: Loader<PathBuf, Preview>,
@@ -267,6 +255,7 @@ impl FilesApp {
             renaming: None,
             clipboard: None,
             menu: None,
+            menu_from_toolbar: false,
             dialog: None,
             quicklook: None,
             previews,
@@ -1102,94 +1091,65 @@ impl FilesApp {
 
     // -- menus ----------------------------------------------------------------
 
-    fn item(label: impl Into<String>, action: Action) -> MenuItem {
-        MenuItem { label: label.into(), action: Some(action), enabled: true, checked: false, shortcut: "" }
-    }
-
-    fn sep() -> MenuItem {
-        MenuItem { label: String::new(), action: None, enabled: false, checked: false, shortcut: "" }
-    }
-
-    fn selection_items(&self) -> Vec<MenuItem> {
+    fn selection_items(&self) -> Vec<MenuItem<Action>> {
         let sel = self.selected_entries();
         let n = sel.len();
         let name = if n == 1 { format!("\u{201c}{}\u{201d}", sel[0].name) } else { format!("{n} Items") };
-        let with = |mut i: MenuItem, shortcut: &'static str, enabled: bool| {
-            i.shortcut = shortcut;
-            i.enabled = enabled;
-            i
-        };
         if self.in_trash() {
             return vec![
-                with(Self::item("Put Back", Action::PutBack), "", true),
-                with(Self::item("Delete Immediately\u{2026}", Action::DeleteNow), "", true),
-                Self::sep(),
-                with(Self::item(format!("Quick Look {name}"), Action::QuickLook), "Space", true),
-                Self::sep(),
-                with(Self::item("Empty Trash", Action::EmptyTrash), "", !self.trash_is_empty()),
+                MenuItem::new("Put Back", Action::PutBack),
+                MenuItem::new("Delete Immediately\u{2026}", Action::DeleteNow),
+                MenuItem::separator(),
+                MenuItem::new(format!("Quick Look {name}"), Action::QuickLook).shortcut("Space"),
+                MenuItem::separator(),
+                MenuItem::new("Empty Trash", Action::EmptyTrash).enabled(!self.trash_is_empty()),
             ];
         }
         let mut items = vec![
-            with(Self::item("Open", Action::Open), "Ctrl+O", true),
-            Self::sep(),
-            with(Self::item("Move to Trash", Action::Trash), "Delete", true),
-            Self::sep(),
-            with(Self::item("Rename", Action::Rename), "Enter", n == 1),
-            with(Self::item("Duplicate", Action::Duplicate), "Ctrl+D", self.target_dir().is_some()),
-            with(Self::item(format!("Quick Look {name}"), Action::QuickLook), "Space", true),
-            Self::sep(),
-            with(Self::item(format!("Copy {name}"), Action::Copy), "Ctrl+C", true),
-            with(Self::item("Cut", Action::Cut), "Ctrl+X", true),
+            MenuItem::new("Open", Action::Open).shortcut("Ctrl+O"),
+            MenuItem::separator(),
+            MenuItem::new("Move to Trash", Action::Trash).shortcut("Delete"),
+            MenuItem::separator(),
+            MenuItem::new("Rename", Action::Rename).shortcut("Enter").enabled(n == 1),
+            MenuItem::new("Duplicate", Action::Duplicate).shortcut("Ctrl+D").enabled(self.target_dir().is_some()),
+            MenuItem::new(format!("Quick Look {name}"), Action::QuickLook).shortcut("Space"),
+            MenuItem::separator(),
+            MenuItem::new(format!("Copy {name}"), Action::Copy).shortcut("Ctrl+C"),
+            MenuItem::new("Cut", Action::Cut).shortcut("Ctrl+X"),
         ];
         if self.searching() || self.loc == Location::Recents {
-            items.push(Self::sep());
-            items.push(with(Self::item("Show in Enclosing Folder", Action::ShowEnclosing), "", n == 1));
+            items.push(MenuItem::separator());
+            items.push(MenuItem::new("Show in Enclosing Folder", Action::ShowEnclosing).enabled(n == 1));
         }
         items
     }
 
-    fn background_items(&self) -> Vec<MenuItem> {
+    fn background_items(&self) -> Vec<MenuItem<Action>> {
         let mut items = Vec::new();
         if self.in_trash() {
-            let mut empty = Self::item("Empty Trash", Action::EmptyTrash);
-            empty.enabled = !self.trash_is_empty();
-            items.push(empty);
-            items.push(Self::sep());
+            items.push(MenuItem::new("Empty Trash", Action::EmptyTrash).enabled(!self.trash_is_empty()));
+            items.push(MenuItem::separator());
         } else {
             let can = self.target_dir().is_some();
-            let mut nf = Self::item("New Folder", Action::NewFolder);
-            nf.enabled = can;
-            nf.shortcut = "Ctrl+Shift+N";
-            items.push(nf);
-            items.push(Self::sep());
+            items.push(MenuItem::new("New Folder", Action::NewFolder).shortcut("Ctrl+Shift+N").enabled(can));
+            items.push(MenuItem::separator());
             let label = match &self.clipboard {
                 Some((p, _)) if p.len() == 1 => "Paste Item".to_string(),
                 Some((p, _)) => format!("Paste {} Items", p.len()),
                 None => "Paste".to_string(),
             };
-            let mut paste = Self::item(label, Action::Paste);
-            paste.enabled = can && self.clipboard.is_some();
-            paste.shortcut = "Ctrl+V";
-            items.push(paste);
-            items.push(Self::sep());
+            items.push(MenuItem::new(label, Action::Paste).shortcut("Ctrl+V").enabled(can && self.clipboard.is_some()));
+            items.push(MenuItem::separator());
         }
         for (v, label, key) in [(ViewMode::Icons, "as Icons", "Ctrl+1"), (ViewMode::List, "as List", "Ctrl+2"), (ViewMode::Columns, "as Columns", "Ctrl+3")] {
-            let mut i = Self::item(label, Action::View(v));
-            i.checked = self.view == v;
-            i.shortcut = key;
-            items.push(i);
+            items.push(MenuItem::new(label, Action::View(v)).checked(self.view == v).shortcut(key));
         }
-        items.push(Self::sep());
+        items.push(MenuItem::separator());
         for k in SortKey::ALL {
-            let mut i = Self::item(format!("Sort by {}", k.label()), Action::Sort(k));
-            i.checked = self.sort == k;
-            items.push(i);
+            items.push(MenuItem::new(format!("Sort by {}", k.label()), Action::Sort(k)).checked(self.sort == k));
         }
-        items.push(Self::sep());
-        let mut h = Self::item("Show Hidden Files", Action::ToggleHidden);
-        h.checked = self.show_hidden;
-        h.shortcut = "Ctrl+Shift+.";
-        items.push(h);
+        items.push(MenuItem::separator());
+        items.push(MenuItem::new("Show Hidden Files", Action::ToggleHidden).checked(self.show_hidden).shortcut("Ctrl+Shift+."));
         items
     }
 
@@ -1198,13 +1158,15 @@ impl FilesApp {
             self.select_only(path);
         }
         cx.focus("content");
-        self.menu = Some(Menu { pos: cx.mouse, items: self.selection_items() });
+        self.menu = Some(Menu::new(cx.mouse, self.selection_items()));
+        self.menu_from_toolbar = false;
     }
 
     fn background_menu(&mut self, cx: &mut Cx) {
         self.clear_selection();
         cx.focus("content");
-        self.menu = Some(Menu { pos: cx.mouse, items: self.background_items() });
+        self.menu = Some(Menu::new(cx.mouse, self.background_items()));
+        self.menu_from_toolbar = false;
     }
 
     /// The toolbar's action menu: the selection's commands, then the folder's.
@@ -1212,10 +1174,11 @@ impl FilesApp {
         let mut items = Vec::new();
         if !self.selection.is_empty() {
             items.extend(self.selection_items());
-            items.push(Self::sep());
+            items.push(MenuItem::separator());
         }
         items.extend(self.background_items());
-        self.menu = Some(Menu { pos, items });
+        self.menu = Some(Menu::new(pos, items));
+        self.menu_from_toolbar = true;
     }
 
     fn run(&mut self, action: Action, cx: &mut Cx) {
@@ -1426,9 +1389,17 @@ impl FilesApp {
             }
             return true;
         }
+        // An open menu takes the keyboard: arrows, type-to-select, Return, Escape.
+        if let Some(menu) = &mut self.menu {
+            match menu.key(key, cx) {
+                MenuKey::Pick(a) => self.run(a, cx),
+                MenuKey::Close => self.menu = None,
+                MenuKey::Stay => {}
+            }
+            return true;
+        }
         if key.is_named(NamedKey::Escape) {
-            if self.menu.take().is_some() {
-            } else if self.quicklook.take().is_some() {
+            if self.quicklook.take().is_some() {
             } else if self.renaming.is_some() {
                 self.finish_rename(false, cx);
             } else if self.drag.take().is_some() {
@@ -1437,9 +1408,6 @@ impl FilesApp {
                 self.on_input(eid("search"), cx);
                 cx.focus("content");
             }
-            return true;
-        }
-        if self.menu.is_some() {
             return true;
         }
         if self.renaming.is_some() {
@@ -1724,6 +1692,7 @@ impl FilesApp {
     pub fn set_query(&mut self, q: &str, cx: &mut Cx) {
         self.search.borrow_mut().set_text(&mut cx.text.fonts, q);
         self.on_input(eid("search"), cx);
+        cx.focus("search");
     }
 
     /// Band selection: everything whose icon cell meets the band.
@@ -1876,6 +1845,20 @@ mod tests {
             assert_eq!(app.selected_paths(), [docs.join("Z/b.txt")]);
             app.handle_key(&key(Key::Named(NamedKey::ArrowLeft), false, false), cx);
             assert_eq!(app.selected_paths(), [docs.join("Z")]);
+
+            // The context menu from the keyboard: type to jump, arrows, Return.
+            app.background_menu(cx);
+            app.handle_key(&key(Key::Character("a".into()), false, false), cx);
+            app.handle_key(&key(Key::Named(NamedKey::ArrowDown), false, false), cx);
+            app.handle_key(&key(Key::Named(NamedKey::Enter), false, false), cx);
+            assert!(app.menu.is_none());
+            assert_eq!(app.view, ViewMode::List);
+            // Escape closes it without doing anything; keys don't reach the list meanwhile.
+            app.background_menu(cx);
+            app.handle_key(&key(Key::Named(NamedKey::Delete), false, false), cx);
+            app.handle_key(&key(Key::Named(NamedKey::Escape), false, false), cx);
+            assert!(app.menu.is_none());
+            assert_eq!(app.view, ViewMode::List);
         });
         assert!(png.exists());
         let _ = std::fs::remove_file(png);

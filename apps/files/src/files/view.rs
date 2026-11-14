@@ -12,7 +12,7 @@ use ui::*;
 use super::fs::{self, Entry, Op, SortKey, format_size};
 use super::icons::{self, Icon};
 use super::theme::Theme;
-use super::{Action, Dialog, DropTarget, FilesApp, Location, Menu, Preview, SIDEBAR_W, TOOLBAR_H, ViewMode};
+use super::{Dialog, DropTarget, FilesApp, Location, Preview, SIDEBAR_W, TOOLBAR_H, ViewMode};
 
 const ICON: f32 = 64.0;
 const CELL_MIN_W: f32 = 104.0;
@@ -83,14 +83,14 @@ impl FilesApp {
 
         let mut root = div().w(w).h(h).flex_row().bg(t.content).text_color(t.text);
         root = root.child(self.sidebar(cx, &t)).child(div().w(1.0).h_full().shrink_0().bg(t.divider)).child(self.main(cx, &t));
-        if let Some(p) = self.progress_panel(&t) {
+        if let Some(p) = self.progress_panel(cx, &t) {
             root = root.child(p);
         }
         if self.quicklook.is_some() {
             root = root.child(self.quicklook_panel(cx, &t));
         }
         if let Some(menu) = &self.menu {
-            root = root.child(menu_overlay(menu, cx, &t));
+            root = root.child(menu.render(cx, |s: &mut Self, a, cx| s.run(a, cx), |s: &mut Self, _| s.menu = None));
         }
         if let Some(d) = &self.dialog {
             root = root.child(self.dialog_sheet(d, cx, &t));
@@ -113,15 +113,12 @@ impl FilesApp {
     // -- sidebar --------------------------------------------------------------
 
     fn sidebar(&mut self, cx: &Cx, t: &Theme) -> Div<Self> {
-        let mut header = div().h(TOOLBAR_H).shrink_0().flex_row().items_center().pl(20.0).pr(12.0).window_drag();
+        let mut header = div().h(TOOLBAR_H).shrink_0().flex_row().items_center().pl(native::TRAFFIC_LIGHTS_X).pr(12.0).window_drag();
         if let Some(buttons) = ui::chrome::window_buttons(true, cx, t.text) {
             header = header.child(buttons);
         }
 
-        let section = |label: &str| -> AnyElement<Self> {
-            text(label.to_string()).size(11.0).weight(Weight::Semibold).color(t.text_secondary).pl(10.0).pt(12.0).pb(5.0).into()
-        };
-        let mut rows: Vec<AnyElement<Self>> = vec![section("Favorites")];
+        let mut rows: Vec<AnyElement<Self>> = vec![native::sidebar_header("Favorites", cx).pt(4.0).into()];
         rows.push(self.sidebar_row("Recents".into(), icons::clock, Location::Recents, None, cx, t).into());
         let p = self.places.clone();
         let home_name = p.home.file_name().map_or("Home".to_string(), |n| n.to_string_lossy().into_owned());
@@ -139,7 +136,7 @@ impl FilesApp {
                 rows.push(self.sidebar_row(name, icon, Location::Dir(path.clone()), None, cx, t).into());
             }
         }
-        rows.push(section("Locations"));
+        rows.push(native::sidebar_header("Locations", cx).into());
         for m in self.mounts.clone() {
             let icon: Icon = if m.removable {
                 icons::external_drive
@@ -160,7 +157,7 @@ impl FilesApp {
             .flex_col()
             .bg(t.sidebar)
             .child(header)
-            .child(div().id("sidebar-scroll").scroll_y().flex_1().flex_col().px(10.0).pb(10.0).gap(1.0).children(rows))
+            .child(div().id("sidebar-scroll").scroll_y().flex_1().flex_col().pb(10.0).gap(1.0).children(rows))
     }
 
     fn sidebar_row(&mut self, name: String, icon: Icon, loc: Location, detail: Option<String>, cx: &Cx, t: &Theme) -> Div<Self> {
@@ -175,23 +172,24 @@ impl FilesApp {
         if let Some(target) = target {
             self.drop_targets.push((id, target));
         }
-        let accent = t.accent;
-        let bg = if hot { Some(t.accent.alpha(0.22)) } else { selected.then_some(t.sidebar_selection) };
+        let accent = native::sidebar_icon(cx, t.accent);
+        let bg = if hot { Some(t.accent.alpha(0.22)) } else { selected.then_some(native::sidebar_selection(cx)) };
         let l = loc.clone();
         div()
             .id(id)
-            .h(28.0)
+            .h(native::SIDEBAR_ROW_H)
             .shrink_0()
-            .px(8.0)
-            .rounded(6.0)
+            .mx(native::SIDEBAR_INSET)
+            .px(native::SIDEBAR_ROW_PAD)
+            .rounded(native::SIDEBAR_RADIUS)
             .flex_row()
             .items_center()
-            .gap(7.0)
+            .gap(8.0)
             .bg_opt(bg)
             .on_mouse_down(move |s: &mut Self, cx: &mut Cx| s.go(l.clone(), cx))
-            .child(canvas(move |s, b| icon(s, b, accent)).size(18.0).shrink_0())
+            .child(canvas(move |s, b| icon(s, b, accent)).size(native::SIDEBAR_ICON).shrink_0())
             .child(text(name).truncate().flex_1())
-            .child_if(detail.is_some(), || text(detail.clone().unwrap_or_default()).size(11.0).color(t.text_secondary).shrink_0().into())
+            .child_if(detail.is_some(), || text(detail.clone().unwrap_or_default()).size(11.0).tabular().color(t.text_secondary).shrink_0().into())
     }
 
     // -- toolbar --------------------------------------------------------------
@@ -211,28 +209,32 @@ impl FilesApp {
         self.mounts.iter().find(|m| m.path == Path::new("/")).map_or_else(|| self.disk_name.clone(), |m| m.name.clone())
     }
 
-    fn tool_button(id: &'static str, t: &Theme, enabled: bool, icon: Icon, on_click: impl Fn(&mut Self, &mut Cx) + 'static) -> Div<Self> {
-        let color = if enabled { t.icon } else { t.icon_disabled };
-        let mut d = div().id(id).w(32.0).h(28.0).rounded(6.0).items_center().justify_center().child(canvas(move |s, b| icon(s, b, color)).size(18.0));
-        if enabled {
-            d = d.hover_bg(t.icon_hover_bg).on_click(on_click);
+    /// A 32×28 toolbar button: hover fill, darker while pressed, dimmed when
+    /// disabled or in an inactive window.
+    fn tool_button(id: &'static str, cx: &Cx, t: &Theme, enabled: bool, icon: Icon, on_click: impl Fn(&mut Self, &mut Cx) + 'static) -> Div<Self> {
+        let color = native::toolbar_ink(cx, if enabled { t.icon } else { t.icon_disabled });
+        let d = div().id(id).w(32.0).h(28.0).rounded(6.0).items_center().justify_center().child(canvas(move |s, b| icon(s, b, color)).size(18.0));
+        if !enabled {
+            return d;
         }
-        d
+        let fill = if pressed(id, cx) { t.icon_pressed_bg } else { t.icon_hover_bg };
+        d.hover_bg(fill).on_click(on_click)
     }
 
     fn toolbar(&mut self, cx: &Cx, t: &Theme) -> Div<Self> {
         let nav = div()
             .flex_row()
             .items_center()
-            .child(Self::tool_button("back", t, !self.back.is_empty(), icons::chevron_left, |s, cx| s.go_back(cx)))
-            .child(Self::tool_button("forward", t, !self.forward.is_empty(), icons::chevron_right, |s, cx| s.go_forward(cx)));
+            .child(Self::tool_button("back", cx, t, !self.back.is_empty(), icons::chevron_left, |s, cx| s.go_back(cx)))
+            .child(Self::tool_button("forward", cx, t, !self.forward.is_empty(), icons::chevron_right, |s, cx| s.go_forward(cx)));
 
         let mut seg = div().flex_row().items_center().h(28.0).p(2.0).rounded(8.0).bg(t.field);
         for (mode, icon) in [(ViewMode::Icons, icons::grid as Icon), (ViewMode::List, icons::list), (ViewMode::Columns, icons::columns)] {
             let on = self.view == mode;
-            let color = if on { t.text } else { t.icon };
+            let id = eid(("view-mode", mode.name()));
+            let color = native::toolbar_ink(cx, if on { t.text } else { t.icon });
             let mut s = div()
-                .id(("view-mode", mode.name()))
+                .id(id)
                 .w(34.0)
                 .h(24.0)
                 .rounded(6.0)
@@ -242,11 +244,14 @@ impl FilesApp {
                 .child(canvas(move |sc, b| icon(sc, b, color)).size(16.0));
             if on {
                 s = s.bg(t.segment_selected).shadow(rgba(0x000000, 0.12), 2.0, 0.5);
+            } else {
+                s = s.hover_bg(if pressed(id, cx) { t.icon_pressed_bg } else { t.icon_hover_bg });
             }
             seg = seg.child(s);
         }
 
-        let icon_c = t.icon;
+        let icon_c = native::toolbar_ink(cx, t.icon);
+        let action_open = self.menu.is_some() && self.menu_from_toolbar;
         let action = div()
             .id("action-menu")
             .h(28.0)
@@ -255,7 +260,8 @@ impl FilesApp {
             .flex_row()
             .items_center()
             .gap(1.0)
-            .hover_bg(t.icon_hover_bg)
+            .bg_opt(action_open.then_some(t.icon_pressed_bg))
+            .hover_bg(if pressed("action-menu", cx) || action_open { t.icon_pressed_bg } else { t.icon_hover_bg })
             .on_click(|s: &mut Self, cx: &mut Cx| {
                 let at = Point { x: cx.mouse.x - 20.0, y: TOOLBAR_H - 6.0 };
                 s.action_menu(at);
@@ -264,12 +270,15 @@ impl FilesApp {
             .child(canvas(move |s, b| icons::chevron_down(s, b, icon_c)).size(10.0));
 
         let query_set = !self.query.is_empty();
+        // Narrow windows take room from the search field before the title.
+        let search_w = (self.content_bounds.get().w - 386.0).clamp(100.0, 180.0);
         let search = div()
             .id("search-box")
-            .w(180.0)
+            .w(search_w)
             .h(28.0)
             .rounded(7.0)
             .bg(t.field)
+            .focus_ring(cx.is_focused("search"), cx)
             .flex_row()
             .items_center()
             .gap(6.0)
@@ -284,7 +293,7 @@ impl FilesApp {
                     .id("search-clear")
                     .size(16.0)
                     .rounded(8.0)
-                    .bg(c.alpha(0.5))
+                    .bg(c.alpha(if pressed("search-clear", cx) { 0.8 } else { 0.5 }))
                     .shrink_0()
                     .on_click(|s: &mut Self, cx: &mut Cx| {
                         s.search.borrow_mut().set_text(&mut cx.text.fonts, "");
@@ -305,7 +314,7 @@ impl FilesApp {
             .pr(12.0)
             .window_drag()
             .child(nav)
-            .child(text(self.title()).size(15.0).weight(Weight::Bold).truncate().flex_1())
+            .child(text(self.title()).size(15.0).weight(Weight::Bold).color(native::toolbar_ink(cx, t.text)).truncate().flex_1())
             .child(seg)
             .child(action)
             .child(search)
@@ -320,7 +329,7 @@ impl FilesApp {
         let (w, h) = cx.window_size;
         let top = TOOLBAR_H + 1.0 + if self.in_trash() && !self.searching() { TRASH_BAR_H } else { 0.0 };
         let x = SIDEBAR_W + 1.0;
-        self.content_bounds.set(Bounds::new(x, top, (w - x).max(0.0), (h - top - PATH_BAR_H - STATUS_H).max(0.0)));
+        self.content_bounds.set(Bounds::new(x, top, (w - x).max(0.0), (h - top - 1.0 - PATH_BAR_H - STATUS_H).max(0.0)));
         let mut content = div().id("content").focusable().flex_1().min_w_0().flex_col().clip();
         let view = if self.searching() && self.view == ViewMode::Columns { ViewMode::List } else { self.view };
         let view = if view == ViewMode::Columns && self.current_dir().is_none() { ViewMode::List } else { view };
@@ -336,13 +345,24 @@ impl FilesApp {
 
         let mut col = div().flex_1().min_w_0().h_full().flex_col().bg(t.content).child(self.toolbar(cx, t)).child(div().h(1.0).shrink_0().bg(t.divider));
         if self.in_trash() && !self.searching() {
-            col = col.child(self.trash_bar(t));
+            col = col.child(self.trash_bar(cx, t));
         }
-        col.child(content).child(self.path_bar(cx, t)).child(self.status_bar(t))
+        col.child(content).child(div().h(1.0).shrink_0().bg(t.divider)).child(self.path_bar(cx, t)).child(self.status_bar(t))
     }
 
-    fn trash_bar(&self, t: &Theme) -> Div<Self> {
+    fn trash_bar(&self, cx: &Cx, t: &Theme) -> Div<Self> {
         let empty = self.trash_is_empty();
+        let mut button = div().id("empty-trash").h(24.0).px(12.0).rounded(6.0).items_center().bg(t.field);
+        if empty {
+            button = button.child(text("Empty").color(t.text_tertiary));
+        } else {
+            let fill = if pressed("empty-trash", cx) { t.icon_pressed_bg } else { t.hover };
+            button = button
+                .bg(t.field)
+                .hover_bg(fill)
+                .on_click(|s: &mut Self, _: &mut Cx| s.dialog = Some(Dialog::EmptyTrash))
+                .child(text("Empty"));
+        }
         div()
             .h(TRASH_BAR_H)
             .shrink_0()
@@ -353,26 +373,11 @@ impl FilesApp {
             .bg(t.sidebar)
             .border_b(t.divider)
             .child(text("Trash").weight(Weight::Semibold))
-            .child(
-                div()
-                    .id("empty-trash")
-                    .h(22.0)
-                    .px(12.0)
-                    .rounded(6.0)
-                    .items_center()
-                    .bg(t.field)
-                    .hover_bg(t.hover)
-                    .on_click(move |s: &mut Self, _: &mut Cx| {
-                        if !empty {
-                            s.dialog = Some(Dialog::EmptyTrash);
-                        }
-                    })
-                    .child(text("Empty").size(12.0).color(if empty { t.text_tertiary } else { t.text })),
-            )
+            .child(button)
     }
 
-    fn path_bar(&mut self, cx: &Cx, t: &Theme) -> Div<Self> {
-        let mut bar = div().h(PATH_BAR_H).shrink_0().flex_row().items_center().px(10.0).gap(2.0).border_b(t.divider);
+    fn path_bar(&mut self, cx: &mut Cx, t: &Theme) -> Div<Self> {
+        let mut bar = div().h(PATH_BAR_H).shrink_0().flex_row().items_center().px(10.0).gap(2.0).border_b(t.divider).clip();
         let mut segments: Vec<(String, Option<PathBuf>, Kind)> = Vec::new();
         match &self.loc {
             Location::Dir(dir) => {
@@ -387,8 +392,32 @@ impl FilesApp {
         if let Some(e) = self.single_selected().filter(|e| !self.searching() && e.path.parent() == self.current_dir()) {
             segments.push((e.name.clone(), None, e.kind));
         }
-        let sep = t.text_tertiary;
+        // Like Finder, when the path doesn't fit, folders nearest the disk
+        // shrink to just their icon, until it does.
+        let style = TextStyle { size: 11.0, ..TextStyle::default() };
         let n = segments.len();
+        let widths: Vec<f32> = segments.iter().map(|(name, ..)| cx.text.measure(name, &style, None, false).0 + 4.0).collect();
+        let icon_only = 2.0 * 4.0 + 16.0 + 2.0;
+        let avail = self.content_bounds.get().w - 20.0;
+        let mut total = widths.iter().sum::<f32>() + n as f32 * icon_only + (n.saturating_sub(1)) as f32 * 16.0;
+        let mut collapsed = vec![false; n];
+        for i in 0..n.saturating_sub(1) {
+            if total <= avail {
+                break;
+            }
+            collapsed[i] = true;
+            total -= widths[i];
+        }
+        // The last folder to shrink keeps what fits of its name.
+        let mut squeezed = None;
+        if let Some(k) = collapsed.iter().rposition(|c| *c) {
+            let room = avail - total;
+            if room >= 40.0 {
+                collapsed[k] = false;
+                squeezed = Some((k, icon_only + room));
+            }
+        }
+        let sep = t.text_tertiary;
         for (i, (name, path, kind)) in segments.into_iter().enumerate() {
             if i > 0 {
                 bar = bar.child(canvas(move |s, b| icons::chevron_small(s, b, sep)).w(12.0).h(14.0).shrink_0());
@@ -401,17 +430,22 @@ impl FilesApp {
             } else {
                 canvas(move |s, b| icons::page(s, b, kind)).size(16.0).shrink_0().into()
             };
-            let mut seg = div().flex_row().items_center().gap(4.0).h(20.0).px(4.0).rounded(4.0).min_w_0().child(icon).child(text(name).size(11.5).color(t.text_secondary).truncate());
-            if i == n - 1 {
-                seg = seg.shrink_0().max_w(260.0);
+            let mut seg = div().flex_row().items_center().gap(4.0).h(20.0).px(4.0).rounded(4.0).child(icon);
+            if !collapsed[i] {
+                seg = seg.child(text(name).size(11.0).color(t.text_secondary).truncate());
             }
+            seg = match squeezed {
+                Some((k, w)) if k == i => seg.max_w(w).min_w_0(),
+                _ if i == n - 1 => seg.min_w_0(),
+                _ => seg.shrink_0(),
+            };
             if let Some(p) = path {
                 let id = eid(("path", &p));
                 let hot = self.dragging_over(id, cx);
                 self.drop_targets.push((id, DropTarget::Folder(p.clone())));
                 seg = seg
                     .id(id)
-                    .hover_bg(t.hover)
+                    .hover_bg(if pressed(id, cx) { t.icon_pressed_bg } else { t.hover })
                     .bg_opt(hot.then_some(t.accent.alpha(0.22)))
                     .on_click(move |s: &mut Self, cx: &mut Cx| s.go(Location::Dir(p.clone()), cx));
             }
@@ -428,7 +462,7 @@ impl FilesApp {
         if let Some((free, _)) = super::places::space(&dir) {
             s.push_str(&format!(", {} available", format_size(free)));
         }
-        div().h(STATUS_H).shrink_0().items_center().justify_center().child(text(s).size(11.0).color(t.text_secondary))
+        div().h(STATUS_H).shrink_0().items_center().justify_center().child(text(s).size(11.0).tabular().color(t.text_secondary))
     }
 
     // -- icons ----------------------------------------------------------------
@@ -542,8 +576,16 @@ impl FilesApp {
         lines
     }
 
-    fn rename_field(&self, t: &Theme, w: Option<f32>) -> Div<Self> {
-        let mut d = div().h(20.0).px(3.0).items_center().rounded(4.0).bg(t.content).border(t.accent, 1.5).child(input("rename", &self.rename).flex_1());
+    fn rename_field(&self, cx: &Cx, t: &Theme, w: Option<f32>) -> Div<Self> {
+        let mut d = div()
+            .h(20.0)
+            .px(3.0)
+            .items_center()
+            .rounded(4.0)
+            .bg(t.content)
+            .border(t.divider, 0.5)
+            .focus_ring(cx.is_focused("rename"), cx)
+            .child(input("rename", &self.rename).flex_1());
         d = match w {
             Some(w) => d.w(w),
             None => d.flex_1(),
@@ -624,14 +666,10 @@ impl FilesApp {
 
         let label_w = cell_w - 10.0;
         let label: Div<Self> = if self.renaming.as_ref() == Some(&e.path) {
-            div().mt(4.0).child(self.rename_field(t, Some(label_w)))
+            div().mt(4.0).child(self.rename_field(cx, t, Some(label_w)))
         } else {
             let lines = self.label_lines(cx, &e.name, label_w - 8.0);
-            let (bg, fg) = match (selected, focused) {
-                (true, true) => (Some(t.accent), Color::WHITE),
-                (true, false) => (Some(t.selection_unfocused), t.text),
-                _ => (None, t.text),
-            };
+            let (bg, fg) = if selected { (Some(native::selection(cx, focused)), native::selection_text(cx, focused, t.text)) } else { (None, t.text) };
             let mut l = div().id(label_id).mt(4.0).flex_col().items_center();
             for line in lines {
                 l = l.child(div().h(LABEL_LINE).px(4.0).rounded(4.0).items_center().bg_opt(bg).child(text(line).size(12.0).color(fg)));
@@ -671,14 +709,18 @@ impl FilesApp {
             if right {
                 d = d.justify_end();
             }
-            d = d.child(text(key.label()).size(11.5).weight(if on { Weight::Semibold } else { Weight::Regular }).color(c).truncate());
+            d = d.child(text(key.label()).size(11.0).weight(if on { Weight::Semibold } else { Weight::Regular }).color(c).truncate());
             if on {
                 let ic: Icon = if up { icons::chevron_up } else { icons::chevron_down };
                 d = d.child(canvas(move |s, b| ic(s, b, c)).size(10.0).shrink_0());
             }
+            // The separator sits on the cell's left edge without taking room,
+            // so the titles line up with the columns below.
+            if key != SortKey::Name {
+                d = d.child(div().absolute(0.0, 7.0).w(1.0).h(14.0).bg(t.divider));
+            }
             d
         };
-        let sep = || div().w(1.0).h(14.0).bg(t.divider).shrink_0();
         let mut h = div()
             .h(28.0)
             .shrink_0()
@@ -687,12 +729,10 @@ impl FilesApp {
             .px(10.0)
             .border_b(t.divider)
             .child(cell(SortKey::Name, None, false).pl(30.0))
-            .child(sep())
             .child(cell(SortKey::Modified, Some(DATE_W), false))
-            .child(sep())
             .child(cell(SortKey::Size, Some(SIZE_W), true));
         if show_kind {
-            h = h.child(sep()).child(cell(SortKey::Kind, Some(KIND_W), false));
+            h = h.child(cell(SortKey::Kind, Some(KIND_W), false));
         }
         h
     }
@@ -745,19 +785,20 @@ impl FilesApp {
         if target {
             self.drop_targets.push((id, DropTarget::Folder(e.path.clone())));
         }
-        let (bg, fg, fg2) = match (selected, focused) {
+        let emphasized = selected && focused && cx.window_focused;
+        let (bg, fg, fg2) = match selected {
             _ if hot => (Some(t.accent.alpha(0.25)), t.text, t.text_secondary),
-            (true, true) => (Some(t.accent), Color::WHITE, rgba(0xffffff, 0.85)),
-            (true, false) => (Some(t.selection_unfocused), t.text, t.text_secondary),
-            _ => ((i % 2 == 1).then_some(t.stripe), t.text, t.text_secondary),
+            true => (Some(native::selection(cx, focused)), native::selection_text(cx, focused, t.text), if emphasized { rgba(0xffffff, 0.85) } else { t.text_secondary }),
+            false => ((i % 2 == 1).then_some(t.stripe), t.text, t.text_secondary),
         };
         let name: AnyElement<Self> = if self.renaming.as_ref() == Some(&e.path) {
-            self.rename_field(t, None).into()
+            self.rename_field(cx, t, None).into()
         } else {
             text(e.name.clone()).color(fg).truncate().flex_1().into()
         };
         let date = e.modified.map(|m| fs::format_date(m, now)).unwrap_or_else(|| "--".into());
         let size = if e.is_dir { "--".to_string() } else { format_size(e.size) };
+        let size_text = if e.is_dir { text(size) } else { text(size).tabular() };
         let mut row = div()
             .id(id)
             .h(ROW_H)
@@ -768,10 +809,10 @@ impl FilesApp {
             .items_center()
             .bg_opt(bg)
             .child(div().flex_1().min_w_0().flex_row().items_center().gap(6.0).px(8.0).child(self.file_icon(e, 16.0)).child(name))
-            .child(text(date).size(12.0).color(fg2).truncate().w(DATE_W).px(8.0).shrink_0())
-            .child(div().w(SIZE_W).shrink_0().px(8.0).justify_end().child(text(size).size(12.0).color(fg2)));
+            .child(text(date).tabular().color(fg2).truncate().w(DATE_W).px(8.0).shrink_0())
+            .child(div().w(SIZE_W).shrink_0().px(8.0).justify_end().child(size_text.color(fg2)));
         if show_kind {
-            row = row.child(text(e.kind_name.clone()).size(12.0).color(fg2).truncate().w(KIND_W).px(8.0).shrink_0());
+            row = row.child(text(e.kind_name.clone()).color(fg2).truncate().w(KIND_W).px(8.0).shrink_0());
         }
         self.with_item_handlers(row, &e.path)
     }
@@ -871,18 +912,17 @@ impl FilesApp {
         if target {
             self.drop_targets.push((id, DropTarget::Folder(e.path.clone())));
         }
-        let (bg, fg) = match (selected, accent) {
+        let (bg, fg) = match selected {
             _ if hot => (Some(t.accent.alpha(0.25)), t.text),
-            (true, true) => (Some(t.accent), Color::WHITE),
-            (true, false) => (Some(t.selection_unfocused), t.text),
-            _ => (None, t.text),
+            true => (Some(native::selection(cx, accent)), native::selection_text(cx, accent, t.text)),
+            false => (None, t.text),
         };
         let name: AnyElement<Self> = if self.renaming.as_ref() == Some(&e.path) {
-            self.rename_field(t, None).into()
+            self.rename_field(cx, t, None).into()
         } else {
             text(e.name.clone()).color(fg).truncate().flex_1().into()
         };
-        let chevron = if selected && accent { Color::WHITE } else { t.text_secondary };
+        let chevron = if selected && accent && cx.window_focused { Color::WHITE } else { t.text_secondary };
         let row = div()
             .id(id)
             .h(ROW_H)
@@ -938,7 +978,7 @@ impl FilesApp {
             .child(text(e.name.clone()).size(13.0).weight(Weight::Semibold).mt(6.0))
             .child(text(format!("{} \u{2013} {}", e.kind_name, format_size(e.size))).size(11.0).color(t.text_secondary))
             .child(div().h(1.0).w_full().bg(t.divider).mt(6.0))
-            .child(div().w_full().child(text("Information").size(12.0).weight(Weight::Semibold)));
+            .child(div().w_full().child(text("Information").weight(Weight::Semibold)));
         if let Some(c) = e.created {
             col = col.child(info("Created", fs::format_date_long(c)));
         }
@@ -981,7 +1021,7 @@ impl FilesApp {
         Some(div().inset_0().deferred().child(ghost))
     }
 
-    fn progress_panel(&self, t: &Theme) -> Option<Div<Self>> {
+    fn progress_panel(&self, cx: &Cx, t: &Theme) -> Option<Div<Self>> {
         let job = self.jobs.iter().find(|j| j.started.elapsed() >= super::PROGRESS_DELAY)?;
         let p = &job.progress;
         let (total, done) = (p.total.load(Ordering::Relaxed), p.done.load(Ordering::Relaxed));
@@ -1019,7 +1059,7 @@ impl FilesApp {
                         s.rect(b, track, 3.0);
                         s.rect(Bounds::new(b.x, b.y, (b.w * frac).max(6.0), b.h), fill, 3.0);
                     }).h(8.0).w_full())
-                    .child(text(detail).size(11.0).color(t.text_secondary)),
+                    .child(text(detail).size(11.0).tabular().color(t.text_secondary)),
             )
             .child(
                 div()
@@ -1027,7 +1067,7 @@ impl FilesApp {
                     .size(22.0)
                     .rounded(11.0)
                     .bg(t.field)
-                    .hover_bg(t.hover)
+                    .hover_bg(if pressed("cancel-job", cx) { t.icon_pressed_bg } else { t.hover })
                     .on_click(move |_: &mut Self, _: &mut Cx| progress.cancel.store(true, Ordering::Relaxed))
                     .child({
                         let c = t.text_secondary;
@@ -1054,25 +1094,29 @@ impl FilesApp {
             }
             Dialog::Error(e) => ("The operation can\u{2019}t be completed.".to_string(), e.clone(), None, false),
         };
-        let button = |id: &'static str, label: &str, primary: bool| -> Div<Self> {
-            let (bg, fg) = if primary { (t.accent, Color::WHITE) } else { (t.field, t.text) };
+        let button = |id: &'static str, label: &str, fill: Option<Color>| -> Div<Self> {
+            // The default button loses its color in an inactive window.
+            let (bg, fg) = match fill.filter(|_| cx.window_focused) {
+                Some(c) => (c, Color::WHITE),
+                None => (t.field, t.text),
+            };
+            let down = pressed(id, cx);
+            let bg = if down { pressed_fill(bg, cx) } else { bg };
+            let bg = if down && fill.is_none() { t.icon_pressed_bg } else { bg };
             div().id(id).h(28.0).flex_1().rounded(7.0).bg(bg).items_center().justify_center().child(text(label.to_string()).color(fg).weight(Weight::Medium))
         };
         let mut buttons = div().flex_row().gap(8.0).w_full().mt(6.0);
         match action {
             Some(a) => {
-                buttons = buttons.child(button("dialog-cancel", "Cancel", false).on_click(|s: &mut Self, cx: &mut Cx| {
+                buttons = buttons.child(button("dialog-cancel", "Cancel", None).on_click(|s: &mut Self, cx: &mut Cx| {
                     s.dialog = None;
                     cx.focus("content");
                 }));
-                let mut confirm = button("dialog-ok", a, true).on_click(|s: &mut Self, cx: &mut Cx| s.confirm_dialog(cx));
-                if destructive {
-                    confirm = confirm.bg(t.destructive);
-                }
-                buttons = buttons.child(confirm);
+                let fill = if destructive { t.destructive } else { t.accent };
+                buttons = buttons.child(button("dialog-ok", a, Some(fill)).on_click(|s: &mut Self, cx: &mut Cx| s.confirm_dialog(cx)));
             }
             None => {
-                buttons = buttons.child(button("dialog-ok", "OK", true).on_click(|s: &mut Self, cx: &mut Cx| {
+                buttons = buttons.child(button("dialog-ok", "OK", Some(t.accent)).on_click(|s: &mut Self, cx: &mut Cx| {
                     s.dialog = None;
                     cx.focus("content");
                 }));
@@ -1098,7 +1142,7 @@ impl FilesApp {
                 canvas(move |s, b| icons::trash(s, b, accent)).size(48.0)
             })
             .child(text(title).size(13.0).weight(Weight::Bold).w_full())
-            .child(text(info).size(11.5).color(t.text_secondary).w_full())
+            .child(text(info).size(11.0).color(t.text_secondary).w_full())
             .child(buttons);
         div()
             .inset_0()
@@ -1184,31 +1228,36 @@ impl FilesApp {
             .px(10.0)
             .gap(8.0)
             .border_b(t.divider)
+            // Equal-width ends keep the name centered over the preview.
             .child(
-                div()
-                    .id("ql-close")
-                    .size(24.0)
-                    .rounded(12.0)
-                    .hover_bg(t.hover)
-                    .on_click(|s: &mut Self, _: &mut Cx| s.quicklook = None)
-                    .child(canvas(move |s, b| icons::xmark(s, b, c)).size(24.0)),
+                div().w(64.0).shrink_0().child(
+                    div()
+                        .id("ql-close")
+                        .size(24.0)
+                        .rounded(12.0)
+                        .items_center()
+                        .justify_center()
+                        .hover_bg(if pressed("ql-close", cx) { t.icon_pressed_bg } else { t.hover })
+                        .on_click(|s: &mut Self, _: &mut Cx| s.quicklook = None)
+                        .child(canvas(move |s, b| icons::xmark(s, b, c)).size(16.0)),
+                ),
             )
             .child(div().flex_1().min_w_0().justify_center().child(text(name).weight(Weight::Semibold).truncate()))
-            .child(
+            .child(div().w(64.0).shrink_0().justify_end().child(
                 div()
                     .id("ql-open")
                     .h(24.0)
                     .px(10.0)
                     .rounded(6.0)
                     .bg(t.field)
-                    .hover_bg(t.hover)
+                    .hover_bg(if pressed("ql-open", cx) { t.icon_pressed_bg } else { t.hover })
                     .items_center()
                     .on_click(move |s: &mut Self, cx: &mut Cx| {
                         s.quicklook = None;
                         s.open_entry(open_path.clone(), cx);
                     })
-                    .child(text("Open").size(12.0)),
-            );
+                    .child(text("Open")),
+            ));
         let panel_w = pw.max(320.0);
         let (x, y) = ((w - panel_w) / 2.0 + SIDEBAR_W / 2.0, ((h - ph) / 2.0).max(10.0));
         let x = x.min(w - panel_w - 10.0).max(10.0);
@@ -1236,6 +1285,17 @@ enum ColumnRole {
     Next,
 }
 
+/// Whether the pointer is holding down the control `id`.
+fn pressed(id: impl std::hash::Hash, cx: &Cx) -> bool {
+    cx.mouse_down && cx.hovered(id)
+}
+
+/// A filled button's color while pressed: a shade darker (lighter in dark mode).
+fn pressed_fill(c: Color, cx: &Cx) -> Color {
+    let k = if cx.dark { 1.12 } else { 0.86 };
+    Color { r: (c.r * k).min(1.0), g: (c.g * k).min(1.0), b: (c.b * k).min(1.0), a: c.a }
+}
+
 /// A photo or PDF page drawn as an icon: fitted, on a white mat with a soft shadow.
 fn draw_thumbnail(scene: &mut Scene, b: Bounds, img: &Image, pdf: bool) {
     let inset = (b.w * 0.04).max(0.5);
@@ -1247,63 +1307,6 @@ fn draw_thumbnail(scene: &mut Scene, b: Bounds, img: &Image, pdf: bool) {
     }
     scene.rect_bordered(frame, Color::WHITE, 1.0, rgba(0x000000, if pdf { 0.18 } else { 0.10 }), 0.5);
     scene.image(r, img, 0.0);
-}
-
-fn menu_overlay(menu: &Menu, cx: &Cx, t: &Theme) -> Div<FilesApp> {
-    let (w, h) = cx.window_size;
-    let width = 250.0;
-    let est_h: f32 = 10.0 + menu.items.iter().map(|i| if i.action.is_some() { 24.0 } else { 9.0 }).sum::<f32>();
-    let x = menu.pos.x.min(w - width - 6.0).max(6.0);
-    let y = if menu.pos.y + est_h > h - 6.0 { (menu.pos.y - est_h).max(6.0) } else { menu.pos.y };
-
-    let mut panel = div()
-        .absolute(x, y)
-        .w(width)
-        .flex_col()
-        .p(5.0)
-        .rounded(8.0)
-        .bg(t.menu_bg)
-        .border(t.menu_border, 0.5)
-        .shadow(t.shadow, 14.0, 6.0)
-        .occlude();
-    for (i, item) in menu.items.iter().enumerate() {
-        match &item.action {
-            None => panel = panel.child(div().h(1.0).mt(4.0).mb(4.0).px(6.0).child(div().flex_1().h(1.0).bg(t.menu_border))),
-            Some(action) => {
-                let hovered = item.enabled && cx.hovered(("menu-item", i));
-                let fg = if !item.enabled {
-                    t.text_tertiary
-                } else if hovered {
-                    Color::WHITE
-                } else {
-                    t.text
-                };
-                let shortcut_c = if hovered { rgba(0xffffff, 0.8) } else { t.text_tertiary };
-                let mut row = div()
-                    .id(("menu-item", i))
-                    .h(24.0)
-                    .pl(4.0)
-                    .pr(10.0)
-                    .rounded(5.0)
-                    .flex_row()
-                    .items_center()
-                    .child(div().w(18.0).shrink_0().child_if(item.checked, || canvas(move |s, b| icons::check(s, b, fg)).size(12.0).into()))
-                    .child(text(item.label.clone()).color(fg).truncate().flex_1())
-                    .child_if(!item.shortcut.is_empty(), || text(item.shortcut).size(12.0).color(shortcut_c).shrink_0().into());
-                if item.enabled {
-                    let action: Action = action.clone();
-                    row = row.hover_bg(t.menu_highlight).on_click(move |s: &mut FilesApp, cx: &mut Cx| s.run(action.clone(), cx));
-                }
-                panel = panel.child(row);
-            }
-        }
-    }
-    div()
-        .inset_0()
-        .deferred()
-        .on_mouse_down(|s: &mut FilesApp, _| s.menu = None)
-        .on_right_click(|s: &mut FilesApp, _| s.menu = None)
-        .child(panel)
 }
 
 #[cfg(test)]

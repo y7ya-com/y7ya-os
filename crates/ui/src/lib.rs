@@ -24,6 +24,7 @@ pub use platform::{WindowButton, is_y7ya, window_button_layout};
 pub use scene::Scene;
 pub use text::{TextStyle, Weight};
 pub use widget::{Widget, WidgetEl, widget};
+pub use widgets::image::{Fit, Image, ImageStyle, fit_rect, image};
 pub use widgets::text_view::TextView;
-pub use winit::keyboard::{Key, NamedKey};
+pub use winit::keyboard::{Key, ModifiersState, NamedKey};
 pub use winit::window::CursorIcon;

@@ -5,6 +5,7 @@ const KIND_GLYPH: f32 = 1.0;
 const KIND_COLOR_GLYPH: f32 = 2.0;
 const KIND_SHADOW: f32 = 3.0;
 const KIND_SEGMENT: f32 = 4.0;
+pub(crate) const KIND_IMAGE: f32 = 5.0;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
@@ -24,6 +25,8 @@ pub struct Scene {
     layers: Vec<Vec<Instance>>,
     layer: usize,
     clips: Vec<Bounds>,
+    /// Images drawn this frame; image instances refer to them by index.
+    pub(crate) images: Vec<crate::widgets::image::Image>,
 }
 
 impl Scene {
@@ -31,6 +34,7 @@ impl Scene {
         self.layers.iter_mut().for_each(Vec::clear);
         self.layer = 0;
         self.clips.clear();
+        self.images.clear();
     }
 
     pub fn set_layer(&mut self, layer: usize) {
@@ -65,7 +69,7 @@ impl Scene {
         self.clips = clips;
     }
 
-    fn push(&mut self, mut inst: Instance) {
+    pub(crate) fn push(&mut self, mut inst: Instance) {
         let c = self.clip();
         if c.w <= 0.0 || c.h <= 0.0 {
             return;

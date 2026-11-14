@@ -9,6 +9,7 @@ arboard = { workspace = true }
 bytemuck = { workspace = true }
 cosmic-text = { workspace = true }
 dirs = { workspace = true }
+image = { workspace = true }
 png = { workspace = true }
 pollster = { workspace = true }
 taffy = { workspace = true }

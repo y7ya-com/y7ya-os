@@ -38,8 +38,16 @@ pub trait App: Sized + 'static {
     /// The mouse moved with the left button held (`cx.mouse` is where).
     /// Call `cx.request_redraw()` if that changed anything.
     fn on_drag(&mut self, _cx: &mut Cx) {}
-    /// The left button was released.
+    /// The pointer moved, button held or not (drags, rubber bands). Call
+    /// `cx.request_redraw()` when that changes anything.
+    fn on_mouse_move(&mut self, _cx: &mut Cx) {}
+    /// The left button went up, wherever the pointer is.
     fn on_mouse_up(&mut self, _cx: &mut Cx) {}
+    /// A wheel or touchpad scroll in logical pixels (positive `y` scrolls
+    /// toward the top). Return true to skip the default `scroll_y` handling.
+    fn on_scroll(&mut self, _delta: Point, _cx: &mut Cx) -> bool {
+        false
+    }
     fn on_exit(&mut self) {}
     /// The window is about to close. Return false to keep it open (e.g. to
     /// ask about unsaved changes first).
@@ -354,10 +362,13 @@ impl<A: App> Runner<A> {
     }
 
     fn scroll(&mut self, delta: MouseScrollDelta) {
-        let dy = match delta {
-            MouseScrollDelta::LineDelta(_, y) => y * 48.0,
-            MouseScrollDelta::PixelDelta(p) => p.y as f32 / self.cx.scale,
+        let (dx, dy) = match delta {
+            MouseScrollDelta::LineDelta(x, y) => (x * 48.0, y * 48.0),
+            MouseScrollDelta::PixelDelta(p) => (p.x as f32 / self.cx.scale, p.y as f32 / self.cx.scale),
         };
+        if self.app.as_mut().is_some_and(|app| app.on_scroll(Point { x: dx, y: dy }, &mut self.cx)) {
+            return;
+        }
         let p = self.cx.mouse;
         if let Some((w, _)) = self.frame.hits(p).iter().find_map(|h| h.widget.clone()) {
             if w.borrow_mut().scroll(dy, &mut self.cx) {
@@ -520,7 +531,10 @@ impl<A: App> ApplicationHandler for Runner<A> {
                 self.cx.dark = theme == Theme::Dark;
                 self.cx.redraw = true;
             }
-            WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
+            WindowEvent::ModifiersChanged(m) => {
+                self.modifiers = m.state();
+                self.cx.modifiers = m.state();
+            }
             WindowEvent::Focused(focused) => {
                 self.cx.window_focused = focused;
                 self.cx.redraw = true;
@@ -540,6 +554,9 @@ impl<A: App> ApplicationHandler for Runner<A> {
                     self.cx.redraw = true;
                 }
                 self.update_hover();
+                if let Some(app) = self.app.as_mut() {
+                    app.on_mouse_move(&mut self.cx);
+                }
             }
             WindowEvent::CursorLeft { .. } => {
                 self.cx.mouse = Point { x: -1.0, y: -1.0 };

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use chrono::{Local, TimeZone};
-use ui::widgets::image::{Image, image};
+use ui::widgets::image::{Fit, Image, image};
 use ui::widgets::table::{Cell, Column, Row, Table, TableState, TableStyle};
 use ui::*;
 
@@ -190,9 +190,8 @@ impl Picker {
 
     fn pictures(&mut self, e: &Entry) -> Option<&Pictures> {
         if !self.pictures.contains_key(&e.id) {
-            let decoded = self.store.read(e).and_then(|png| decode_png(&png)).map(|img| {
-                let img = Image { key: ui::eid(("clip", &e.id)), ..img };
-                Pictures { thumb: img.downscaled(96), large: img.downscaled(512) }
+            let decoded = self.store.read(e).and_then(|png| {
+                Some(Pictures { thumb: Image::decode(&png, 96)?, large: Image::decode(&png, 512)? })
             });
             self.pictures.insert(e.id.clone(), decoded);
         }
@@ -228,7 +227,7 @@ impl Picker {
             .child(text(count).size(12.0).color(t.text_secondary).shrink_0())
     }
 
-    fn row(&mut self, e: &Entry, selected: bool, t: &Theme, cx: &mut Cx) -> Row<Self> {
+    fn row(&mut self, e: &Entry, selected: bool, t: &Theme) -> Row<Self> {
         let ink = if selected { Color::WHITE } else { t.text };
         let secondary = if selected { rgba(0xffffff, 0.75) } else { t.text_secondary };
         let id = e.id.clone();
@@ -244,8 +243,8 @@ impl Picker {
             }
             Kind::Image => {
                 if let Some(p) = self.pictures(e) {
-                    let (w, h) = fit(p.thumb.width, p.thumb.height, 34.0, 34.0);
-                    let el = image(cx, &p.thumb).w(w).h(h);
+                    let (w, h) = fit(p.thumb.width(), p.thumb.height(), 34.0, 34.0);
+                    let el = image(&p.thumb, Fit::Contain, 0.0).w(w).h(h);
                     thumb = thumb.bg(if selected { rgba(0xffffff, 0.18) } else { t.field }).child(el);
                 }
                 let dims = e.dims.map_or(String::new(), |(w, h)| format!(" {w}×{h}"));
@@ -282,7 +281,7 @@ impl Picker {
             .on_double_click(move |s: &mut Self, cx: &mut Cx| s.pick(&b.clone(), cx))
     }
 
-    fn preview_pane(&mut self, t: &Theme, cx: &mut Cx) -> Div<Self> {
+    fn preview_pane(&mut self, t: &Theme) -> Div<Self> {
         let pane = div().flex_1().min_w_0().h_full().flex_col().bg(t.preview_bg);
         let Some(e) = self.selected.as_ref().and_then(|s| self.entries.iter().find(|e| &e.id == s)).cloned() else {
             return pane;
@@ -313,8 +312,8 @@ impl Picker {
                 facts.push(("Size", human_size(e.size)));
                 let border = t.divider;
                 let el = self.pictures(&e).map(|p| {
-                    let (w, h) = fit(p.large.width, p.large.height, 380.0, 250.0);
-                    div().w(w).h(h).border(border, 1.0).child(image(cx, &p.large).w(w).h(h))
+                    let (w, h) = fit(p.large.width(), p.large.height(), 380.0, 250.0);
+                    div().w(w).h(h).border(border, 1.0).child(image(&p.large, Fit::Contain, 0.0).w(w).h(h))
                 });
                 div().flex_1().items_center().justify_center().p(20.0).children(el)
             }
@@ -415,10 +414,10 @@ impl App for Picker {
             let state = std::mem::replace(&mut self.list, TableState::new("unused"));
             let list = Table::new(&state, &columns, entries.len(), style)
                 .headerless()
-                .render(cx, |i, cx| {
+                .render(cx, |i, _cx| {
                     let e = &entries[i];
                     let sel = selected.as_deref() == Some(e.id.as_str());
-                    self.row(e, sel, &t, cx)
+                    self.row(e, sel, &t)
                 });
             self.list = state;
             div().flex_1().flex_col().pt(6.0).child(list)
@@ -438,7 +437,7 @@ impl App for Picker {
                     .flex_row()
                     .child(div().w(LIST_W).h_full().shrink_0().flex_col().child(list))
                     .child(div().w(1.0).h_full().bg(t.divider))
-                    .child(self.preview_pane(&t, cx)),
+                    .child(self.preview_pane(&t)),
             )
             .child(div().h(1.0).shrink_0().bg(t.divider))
             .child(self.footer(&t));
@@ -558,24 +557,6 @@ fn fit(w: u32, h: u32, max_w: f32, max_h: f32) -> (f32, f32) {
     let (w, h) = (w.max(1) as f32, h.max(1) as f32);
     let k = (max_w / w).min(max_h / h).min(1.0);
     ((w * k).round().max(1.0), (h * k).round().max(1.0))
-}
-
-/// PNG bytes to straight-alpha RGBA.
-pub fn decode_png(png: &[u8]) -> Option<Image> {
-    let mut dec = png::Decoder::new(std::io::Cursor::new(png));
-    dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-    let mut reader = dec.read_info().ok()?;
-    let mut buf = vec![0; reader.output_buffer_size()?];
-    let info = reader.next_frame(&mut buf).ok()?;
-    let px = &buf[..info.buffer_size()];
-    let rgba: Vec<u8> = match info.color_type {
-        png::ColorType::Rgba => px.to_vec(),
-        png::ColorType::Rgb => px.chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
-        png::ColorType::GrayscaleAlpha => px.chunks_exact(2).flat_map(|p| [p[0], p[0], p[0], p[1]]).collect(),
-        png::ColorType::Grayscale => px.iter().flat_map(|&g| [g, g, g, 255]).collect(),
-        png::ColorType::Indexed => return None,
-    };
-    Some(Image { key: 0, width: info.width, height: info.height, rgba: std::sync::Arc::new(rgba) })
 }
 
 #[cfg(test)]

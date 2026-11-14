@@ -1,0 +1,8 @@
+[package]
+name = "media"
+version = "0.1.0"
+edition = "2024"
+description = "File kinds, previews (images, PDF pages, text) and a background loader, shared by Files and Preview"
+
+[dependencies]
+ui = { path = "../ui" }

@@ -64,6 +64,7 @@ pub struct WinData {
     pub parked_at: Option<Point<i32, Logical>>,
 }
 
+#[allow(dead_code)] // Some protocol states only need to stay alive.
 pub struct Desk {
     pub start: Instant,
     pub display_handle: DisplayHandle,

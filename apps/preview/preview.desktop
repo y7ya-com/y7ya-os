@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Preview
+Comment=View images and PDF documents
+Exec=preview %F
+Icon=image-viewer
+Terminal=false
+Categories=Graphics;Viewer;
+MimeType=image/png;image/jpeg;image/gif;image/webp;image/bmp;application/pdf;
+StartupWMClass=preview

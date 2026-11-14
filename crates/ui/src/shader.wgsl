@@ -1,5 +1,6 @@
 // One instanced pipeline draws everything: rounded rects (with border),
-// soft shadows, line segments (icons) and glyphs from the atlas.
+// soft shadows, line segments (icons), glyphs from the atlas and images (whose
+// own texture is bound in place of the atlas).
 // Coordinates are logical pixels; `globals.scale` converts to physical for AA.
 
 struct Globals {
@@ -41,6 +42,7 @@ const KIND_GLYPH: u32 = 1u;
 const KIND_COLOR_GLYPH: u32 = 2u;
 const KIND_SHADOW: u32 = 3u;
 const KIND_SEGMENT: u32 = 4u;
+const KIND_IMAGE: u32 = 5u;
 
 @vertex
 fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
@@ -50,7 +52,7 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
     if kind == KIND_SHADOW {
         pad = inst.params.z * 2.0;
     }
-    if kind == KIND_GLYPH || kind == KIND_COLOR_GLYPH {
+    if kind == KIND_GLYPH || kind == KIND_COLOR_GLYPH || kind == KIND_IMAGE {
         pad = 0.0;
     }
     var origin = inst.rect.xy - vec2<f32>(pad);
@@ -67,7 +69,12 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
     var out: VOut;
     out.pos = vec4<f32>(p.x / globals.viewport.x * 2.0 - 1.0, 1.0 - p.y / globals.viewport.y * 2.0, 0.0, 1.0);
     out.p = p;
-    out.uv = mix(inst.data.xy, inst.data.zw, corner);
+    var uv_corner = corner;
+    // Images turned an odd number of quarter turns swap axes.
+    if kind == KIND_IMAGE && (u32(inst.params.y + 0.5) & 1u) == 1u {
+        uv_corner = corner.yx;
+    }
+    out.uv = mix(inst.data.xy, inst.data.zw, uv_corner);
     out.rect = inst.rect;
     out.color = inst.color;
     out.border_color = inst.border_color;
@@ -123,6 +130,19 @@ fn shade(in: VOut) -> vec4<f32> {
     let local = in.p - (in.rect.xy + half);
     let radius = min(in.params.x, min(half.x, half.y));
     let d = sd_round_rect(local, half, radius);
+
+    if kind == KIND_IMAGE {
+        // Pick the mip level from how many texels land on each pixel.
+        var screen = in.rect.zw * s;
+        if (u32(in.params.y + 0.5) & 1u) == 1u {
+            screen = screen.yx;
+        }
+        let texels = vec2<f32>(textureDimensions(atlas)) * abs(in.data.zw - in.data.xy);
+        let ratio = texels / max(screen, vec2<f32>(1.0));
+        let lod = max(log2(max(ratio.x, ratio.y)), 0.0);
+        let col = textureSampleLevel(atlas, samp, in.uv, lod);
+        return col * in.color.a * clamp(0.5 - d * s, 0.0, 1.0);
+    }
 
     if kind == KIND_SHADOW {
         let blur = max(in.params.z, 0.001);

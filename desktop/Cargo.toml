@@ -13,5 +13,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 cosmic-text = { workspace = true }
 png = { workspace = true }
+settings = { path = "../crates/settings" }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 resvg = { version = "0.50", default-features = false }
 xcursor = "0.3.11"

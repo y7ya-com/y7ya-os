@@ -180,6 +180,8 @@ impl Xf {
 pub struct Look {
     shaders: Shaders,
     wallpaper: Option<ShaderSlot>,
+    /// The uploaded wallpaper image and the generation it came from.
+    wallpaper_image: Option<(u64, MemoryRenderBuffer)>,
     /// Shader elements for system UI (Mission Control, the switcher), by name.
     slots: HashMap<String, Option<ShaderSlot>>,
     labels: HashMap<String, (MemoryRenderBuffer, (i32, i32))>,
@@ -202,6 +204,7 @@ impl Look {
         Ok(Look {
             shaders: Shaders::compile(renderer)?,
             wallpaper: None,
+            wallpaper_image: None,
             slots: HashMap::new(),
             labels: HashMap::new(),
             icons: HashMap::new(),
@@ -399,8 +402,23 @@ pub fn elements(desk: &mut Desk, look: &mut Look, renderer: &mut GlesRenderer) -
         out.push(DeskElement::Shader(dim));
     }
     layer_elements(desk, cx.renderer, &[Layer::Bottom, Layer::Background], scale, &mut out);
-    let wallpaper = ShaderSlot::get(&mut cx.look.wallpaper, &cx.look.shaders.wallpaper, out_geo, 1.0, vec![("dark", vec![dark as u8 as f32])]);
-    out.push(DeskElement::Shader(wallpaper));
+    match &desk.wallpaper {
+        Some(img) => {
+            if cx.look.wallpaper_image.as_ref().is_none_or(|(g, _)| *g != img.generation) {
+                let buf = MemoryRenderBuffer::from_slice(&img.px, Fourcc::Argb8888, img.size, img.scale, Transform::Normal, None);
+                cx.look.wallpaper_image = Some((img.generation, buf));
+            }
+            let (_, buf) = cx.look.wallpaper_image.as_ref().unwrap();
+            let at: Point<f64, Physical> = out_geo.loc.to_physical_precise_round::<f64, i32>(scale).to_f64();
+            if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(cx.renderer, at, buf, None, None, None, Kind::Unspecified) {
+                out.push(DeskElement::Text(Xf::identity().wrap(elem, scale)));
+            }
+        }
+        None => {
+            let wallpaper = ShaderSlot::get(&mut cx.look.wallpaper, &cx.look.shaders.wallpaper, out_geo, 1.0, vec![("dark", vec![dark as u8 as f32])]);
+            out.push(DeskElement::Shader(wallpaper));
+        }
+    }
     out
 }
 

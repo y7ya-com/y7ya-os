@@ -16,7 +16,11 @@ use smithay::wayland::selection::wlr_data_control::{DataControlHandler, DataCont
 use smithay::wayland::shell::wlr_layer::{
     KeyboardInteractivity, Layer, LayerSurface as WlrLayerSurface, LayerSurfaceData, WlrLayerShellHandler, WlrLayerShellState,
 };
-use smithay::{delegate_data_control, delegate_dmabuf, delegate_layer_shell};
+use smithay::wayland::fractional_scale::{FractionalScaleHandler, with_fractional_scale};
+use smithay::wayland::xdg_activation::{XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData};
+use smithay::{
+    delegate_data_control, delegate_dmabuf, delegate_fractional_scale, delegate_layer_shell, delegate_xdg_activation,
+};
 
 use crate::state::Desk;
 
@@ -135,3 +139,35 @@ impl DataControlHandler for Desk {
 delegate_layer_shell!(Desk);
 delegate_dmabuf!(Desk);
 delegate_data_control!(Desk);
+
+impl FractionalScaleHandler for Desk {}
+
+impl XdgActivationHandler for Desk {
+    fn activation_state(&mut self) -> &mut XdgActivationState {
+        &mut self.activation_state
+    }
+
+    /// An app asks to come forward (e.g. a link opened in a running browser).
+    /// Allow it when the request is recent, like macOS does for user actions.
+    fn request_activation(&mut self, token: XdgActivationToken, data: XdgActivationTokenData, surface: WlSurface) {
+        if data.timestamp.elapsed() < std::time::Duration::from_secs(10) {
+            if let Some(window) = self.window_for_surface(&surface) {
+                self.focus(Some(window));
+            }
+        }
+        self.activation_state.remove_token(&token);
+    }
+}
+
+impl Desk {
+    /// Tells a surface the output's (possibly fractional) scale so it can
+    /// render crisply instead of being resampled.
+    pub fn send_preferred_scale(&self, surface: &WlSurface) {
+        let Some(output) = &self.output else { return };
+        let scale = output.current_scale().fractional_scale();
+        with_states(surface, |states| with_fractional_scale(states, |fs| fs.set_preferred_scale(scale)));
+    }
+}
+
+delegate_fractional_scale!(Desk);
+delegate_xdg_activation!(Desk);

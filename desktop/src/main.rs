@@ -7,6 +7,7 @@
 //! `-c <command>` starts a program once the desktop is up.
 
 mod backend;
+mod config;
 mod grabs;
 mod handlers;
 mod icons;
@@ -49,6 +50,7 @@ fn main() -> anyhow::Result<()> {
         after = Some(backend::winit::init(&mut event_loop, &mut desk)?);
     }
     println!("WAYLAND_DISPLAY={}", desk.socket_name.to_string_lossy());
+    config::init(&event_loop.handle(), &mut desk);
     desk.start_xwayland();
     if flag("--session").is_some() {
         start_session_services(&desk);

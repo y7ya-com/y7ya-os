@@ -47,6 +47,7 @@ impl CompositorHandler for Desk {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        self.send_preferred_scale(surface);
         self.redraw();
         if is_sync_subsurface(surface) {
             return;

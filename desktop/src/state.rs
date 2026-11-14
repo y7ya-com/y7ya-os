@@ -87,6 +87,8 @@ pub struct Desk {
     pub primary_selection_state: PrimarySelectionState,
     pub viewporter_state: ViewporterState,
     pub layer_shell_state: WlrLayerShellState,
+    pub fractional_scale_state: smithay::wayland::fractional_scale::FractionalScaleManagerState,
+    pub activation_state: smithay::wayland::xdg_activation::XdgActivationState,
     pub data_control_state: DataControlState,
     pub dmabuf: Option<(DmabufState, DmabufGlobal)>,
     pub seat: Seat<Desk>,
@@ -111,6 +113,9 @@ pub struct Desk {
     pub draws_cursor: bool,
     /// Switches virtual terminals (only in the real session).
     pub vt_switch: Option<Box<dyn FnMut(i32)>>,
+    pub settings_watcher: Option<settings::Watcher>,
+    pub wallpaper_path: String,
+    pub wallpaper: Option<std::sync::Arc<crate::config::WallpaperImage>>,
 }
 
 impl Desk {
@@ -125,6 +130,8 @@ impl Desk {
         let primary_selection_state = PrimarySelectionState::new::<Self>(&dh);
         let viewporter_state = ViewporterState::new::<Self>(&dh);
         let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
+        let fractional_scale_state = smithay::wayland::fractional_scale::FractionalScaleManagerState::new::<Self>(&dh);
+        let activation_state = smithay::wayland::xdg_activation::XdgActivationState::new::<Self>(&dh);
         let toplevels = crate::toplevels::ForeignToplevels::init(&dh);
         let data_control_state = DataControlState::new::<Self, _>(&dh, Some(&primary_selection_state), |_| true);
         let mut seat_state = SeatState::new();
@@ -171,6 +178,8 @@ impl Desk {
             primary_selection_state,
             viewporter_state,
             layer_shell_state,
+            fractional_scale_state,
+            activation_state,
             data_control_state,
             dmabuf: None,
             seat,
@@ -187,6 +196,9 @@ impl Desk {
             cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
             draws_cursor: false,
             vt_switch: None,
+            settings_watcher: None,
+            wallpaper_path: String::new(),
+            wallpaper: None,
         }
     }
 
@@ -483,7 +495,7 @@ pub fn frame_of(window: &Window, loc: Point<i32, Logical>) -> Rectangle<i32, Log
 }
 
 /// KDE's color scheme says whether the user prefers dark.
-fn detect_dark() -> bool {
+pub fn detect_dark() -> bool {
     if let Ok(theme) = std::env::var("Y7_THEME") {
         return theme == "dark";
     }

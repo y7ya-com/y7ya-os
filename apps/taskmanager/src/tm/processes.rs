@@ -6,7 +6,7 @@ use std::cmp::Ordering;
 use ui::widgets::table::{Cell, Column, Row, Table};
 use ui::*;
 
-use super::{MenuAction, MenuItem, Menu, Sheet, TaskManager, format, icons, step};
+use super::{Menu, MenuAction, MenuItem, Sheet, TaskManager, format, icons, step};
 use super::theme::Theme;
 use crate::sys::process::Process;
 
@@ -156,18 +156,13 @@ impl TaskManager {
         cx.focus("table");
         let Some(pid) = self.sel_pid(&sel) else { return };
         let has_exe = self.sampler.process(pid).is_some_and(|p| p.exe.is_some());
-        let item = |label: &str, a: MenuAction, enabled: bool| MenuItem { label: label.into(), action: Some(a), enabled };
-        let sep = || MenuItem { label: String::new(), action: None, enabled: true };
-        self.menu = Some(Menu {
-            pos: cx.mouse,
-            items: vec![
-                item("End task", MenuAction::EndTask(sel.clone()), true),
-                item("End process tree", MenuAction::EndTree(pid), true),
-                sep(),
-                item("Open file location", MenuAction::OpenLocation(pid), has_exe),
-                item("Properties", MenuAction::Properties(pid), true),
-            ],
-        });
+        self.menu = Some(Menu::new(cx.mouse, vec![
+            MenuItem::new("End task", MenuAction::EndTask(sel.clone())).shortcut("Delete"),
+            MenuItem::new("End process tree", MenuAction::EndTree(pid)),
+            MenuItem::separator(),
+            MenuItem::new("Open file location", MenuAction::OpenLocation(pid)).enabled(has_exe),
+            MenuItem::new("Properties", MenuAction::Properties(pid)),
+        ]));
     }
 
     fn toggle_expanded(&mut self, key: &str) {
@@ -205,14 +200,21 @@ impl TaskManager {
                 };
             })
             .render(cx, |i, _| self.proc_row(&rows[i], total_mem, t, &style));
-        div().id("table").focusable().flex_1().flex_col().min_h(0.0).child(table)
+        div()
+            .id("table")
+            .focusable()
+            .flex_1()
+            .flex_col()
+            .min_h(0.0)
+            .child(table)
+            .child_if(rows.is_empty(), || Self::empty_state("No Results", t).into())
     }
 
     fn proc_row(&self, r: &PRow, total_mem: f32, t: &Theme, style: &ui::widgets::table::TableStyle) -> Row<Self> {
         let sel = self.row_sel(r);
         let selected = sel.is_some() && sel == self.proc_sel;
         let ink = if selected { style.selection_text } else { t.text };
-        let secondary = if selected { ink.alpha(0.75) } else { t.text_secondary };
+        let secondary = super::row_secondary(selected, style, t);
 
         let (name_el, vals, key): (Div<Self>, Vals, String) = match r {
             PRow::Section(title, n) => {
@@ -222,7 +224,7 @@ impl TaskManager {
                     .gap(6.0)
                     .pt(6.0)
                     .child(text(title.to_string()).weight(Weight::Semibold))
-                    .child(text(format!("({n})")).color(t.text_secondary));
+                    .child(text(format!("({n})")).tabular().color(t.text_secondary));
                 return Row::section(("section", *title), label);
             }
             PRow::App(gi, open) => {
@@ -249,7 +251,7 @@ impl TaskManager {
                     .child(chevron)
                     .child(Self::app_glyph(&g.name, 16.0))
                     .child(text(g.name.clone()).truncate())
-                    .child(text(format!("({})", g.pids.len())).color(secondary).shrink_0());
+                    .child(text(format!("({})", g.pids.len())).tabular().color(secondary).shrink_0());
                 (el, self.group_vals(*gi), key)
             }
             PRow::Child(pid) | PRow::Background(pid) => {
@@ -267,7 +269,7 @@ impl TaskManager {
             }
         };
 
-        let num = |s: String| text(s).color(ink);
+        let num = |s: String| text(s).tabular().color(ink);
         let cells = vec![
             Cell::new(name_el),
             Cell::new(text(vals.status).color(secondary).truncate()),
@@ -353,7 +355,7 @@ impl TaskManager {
         }
     }
 
-    pub(super) fn properties_card(&self, pid: i32, t: &Theme) -> Div<Self> {
+    pub(super) fn properties_card(&self, pid: i32, cx: &Cx, t: &Theme) -> Div<Self> {
         let Some(p) = self.sampler.process(pid) else {
             return div().w(360.0).child(text("This process has ended.").color(t.text_secondary));
         };
@@ -377,14 +379,14 @@ impl TaskManager {
         rows.push(("Location", p.exe.as_ref().map_or("—".into(), |e| e.display().to_string())));
         rows.push(("Command line", if p.cmdline.is_empty() { "—".into() } else { p.cmdline.clone() }));
 
-        let mut grid = div().flex_col().gap(7.0).w_full();
+        let mut grid = div().flex_col().gap(8.0).w_full();
         for (k, v) in rows {
             grid = grid.child(
                 div()
                     .flex_row()
                     .gap(12.0)
                     .child(text(k).color(t.text_secondary).w(100.0).shrink_0())
-                    .child(text(v).flex_1().min_w_0().line_height(1.35)),
+                    .child(text(v).tabular().flex_1().min_w_0().line_height(1.35)),
             );
         }
         div()
@@ -413,11 +415,11 @@ impl TaskManager {
                     .justify_end()
                     .gap(8.0)
                     .mt(4.0)
-                    .child(Self::button("props-end", "End task", false, true, t, move |s: &mut Self, _| {
+                    .child(Self::button("props-end", "End task", false, true, cx, t, move |s: &mut Self, _| {
                         s.sheet = None;
                         s.end_pids(&[pid]);
                     }))
-                    .child(Self::button("props-ok", "Done", true, true, t, |s: &mut Self, _| s.sheet = None)),
+                    .child(Self::button("props-ok", "Done", true, true, cx, t, |s: &mut Self, _| s.sheet = None)),
             )
     }
 }

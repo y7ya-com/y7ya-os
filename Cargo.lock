@@ -4866,6 +4866,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "taskmanager"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "ui",
+ "wayland-client",
+ "wayland-protocols-wlr",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

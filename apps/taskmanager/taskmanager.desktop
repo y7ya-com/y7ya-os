@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Task Manager
+Comment=See and end running apps and processes, and watch performance
+Exec=taskmanager
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;
+Keywords=process;kill;cpu;memory;performance;startup;services;
+StartupWMClass=taskmanager

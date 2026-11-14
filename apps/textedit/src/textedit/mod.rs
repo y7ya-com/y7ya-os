@@ -10,8 +10,11 @@ use files::Suggestion;
 use theme::Theme;
 use ui::*;
 
-const TOOLBAR_H: f32 = 52.0;
-const FIND_ROW_H: f32 = 34.0;
+use ui::native::{self, TOOLBAR_H};
+
+const FIND_ROW_H: f32 = 32.0;
+/// The buttons right of the find and replace fields.
+const CONTROLS_W: f32 = 216.0;
 const STATUS_H: f32 = 24.0;
 const SHEET_W: f32 = 460.0;
 
@@ -333,17 +336,22 @@ impl TextEditApp {
             i.placeholder_color = t.text_tertiary;
             i.caret_color = t.text;
             i.selection_color = t.selection;
+            i.inactive_selection_color = t.selection_inactive;
         }
     }
 
-    fn icon_button(
+    /// A toolbar button (32x28) that toggles: gray fill while on, darker
+    /// while held, and its glyph lighter in an inactive window.
+    fn toolbar_button(
         id: &'static str,
-        t: &Theme,
         on: bool,
-        icon: fn(&mut Scene, Bounds, Color),
+        cx: &Cx,
+        t: &Theme,
+        glyph: impl FnOnce(Color) -> AnyElement<Self>,
         on_click: impl Fn(&mut Self, &mut Cx) + 'static,
     ) -> Div<Self> {
-        let color = if on { t.accent } else { t.icon };
+        let pressed = cx.hovered(id) && cx.mouse_down;
+        let ink = if on && cx.window_focused { t.accent } else { native::toolbar_ink(cx, t.icon) };
         div()
             .id(id)
             .w(32.0)
@@ -352,9 +360,20 @@ impl TextEditApp {
             .items_center()
             .justify_center()
             .bg_opt(on.then_some(t.toggled))
-            .hover_bg(if on { t.toggled } else { t.hover })
+            .hover_bg(if pressed { t.pressed } else if on { t.toggled } else { t.hover })
             .on_click(on_click)
-            .child(canvas(move |s, b| icon(s, b, color)).size(20.0))
+            .child(glyph(ink))
+    }
+
+    fn icon_button(
+        id: &'static str,
+        on: bool,
+        cx: &Cx,
+        t: &Theme,
+        icon: fn(&mut Scene, Bounds, Color),
+        on_click: impl Fn(&mut Self, &mut Cx) + 'static,
+    ) -> Div<Self> {
+        Self::toolbar_button(id, on, cx, t, |ink| canvas(move |s, b| icon(s, b, ink)).size(20.0).into(), on_click)
     }
 
     fn toolbar(&self, cx: &mut Cx, t: &Theme) -> Div<Self> {
@@ -364,21 +383,17 @@ impl TextEditApp {
         if let Some(buttons) = ui::chrome::window_buttons(true, cx, t.text) {
             left = left.child(buttons);
         }
-        let mono_color = if mono { t.accent } else { t.icon };
-        let font_button = div()
-            .id("mono")
-            .w(32.0)
-            .h(28.0)
-            .rounded(6.0)
-            .items_center()
-            .justify_center()
-            .bg_opt(mono.then_some(t.toggled))
-            .hover_bg(if mono { t.toggled } else { t.hover })
-            .on_click(|s: &mut Self, cx: &mut Cx| {
+        let font_button = Self::toolbar_button(
+            "mono",
+            mono,
+            cx,
+            t,
+            |ink| text("Aa").size(14.0).weight(Weight::Medium).color(ink).into(),
+            |s: &mut Self, cx: &mut Cx| {
                 let on = !s.doc.borrow().is_monospace();
                 s.doc.borrow_mut().set_monospace(&cx.text.fonts, on);
-            })
-            .child(text("Aa").size(14.0).weight(Weight::Medium).color(mono_color));
+            },
+        );
         let mut right = div()
             .flex_1()
             .flex_row()
@@ -386,20 +401,25 @@ impl TextEditApp {
             .justify_end()
             .gap(2.0)
             .child(font_button)
-            .child(Self::icon_button("wrap", t, wraps, icons::wrap, |s: &mut Self, _| {
+            .child(Self::icon_button("wrap", wraps, cx, t, icons::wrap, |s: &mut Self, _| {
                 let on = !s.doc.borrow().wraps();
                 s.doc.borrow_mut().set_wrap(on);
             }))
-            .child(Self::icon_button("find-button", t, self.find_open, icons::magnifier, |s: &mut Self, cx: &mut Cx| {
+            .child(Self::icon_button("find-button", self.find_open, cx, t, icons::magnifier, |s: &mut Self, cx: &mut Cx| {
                 if s.find_open { s.close_find(cx) } else { s.open_find(false, cx) }
             }));
         if let Some(buttons) = ui::chrome::window_buttons(false, cx, t.text) {
             right = right.child(buttons.ml(14.0));
         }
         // Equal flexible sides keep the title centered in the window.
-        let mut title = div().flex_row().items_center().gap(5.0).min_w_0().child(text(self.name()).weight(Weight::Bold).truncate());
+        let mut title = div()
+            .flex_row()
+            .items_center()
+            .gap(5.0)
+            .min_w_0()
+            .child(text(self.name()).weight(Weight::Bold).color(native::toolbar_ink(cx, t.text)).truncate());
         if self.is_edited() {
-            title = title.child(text("\u{2014} Edited").color(t.text_secondary).shrink_0());
+            title = title.child(text("\u{2014} Edited").color(native::toolbar_ink(cx, t.text_secondary)).shrink_0());
         }
         div()
             .h(TOOLBAR_H)
@@ -407,7 +427,7 @@ impl TextEditApp {
             .flex_row()
             .items_center()
             .gap(12.0)
-            .pl(20.0)
+            .pl(native::TRAFFIC_LIGHTS_X)
             .pr(12.0)
             .bg(t.window)
             .border_b(t.separator)
@@ -417,7 +437,19 @@ impl TextEditApp {
             .child(right)
     }
 
-    fn push_button(id: &'static str, label: &str, default: bool, t: &Theme, on_click: impl Fn(&mut Self, &mut Cx) + 'static) -> Div<Self> {
+    /// A push button. The default one (Return) is filled with the accent,
+    /// and turns plain in an inactive window, as macOS does.
+    fn push_button(
+        id: &'static str,
+        label: &str,
+        default: bool,
+        cx: &Cx,
+        t: &Theme,
+        on_click: impl Fn(&mut Self, &mut Cx) + 'static,
+    ) -> Div<Self> {
+        let pressed = cx.hovered(id) && cx.mouse_down;
+        let accent = default && cx.window_focused;
+        let (bg, hover) = if accent { (t.accent, if pressed { darken(t.accent) } else { t.accent }) } else { (t.field, if pressed { t.pressed } else { t.toggled }) };
         div()
             .id(id)
             .h(24.0)
@@ -425,13 +457,31 @@ impl TextEditApp {
             .rounded(6.0)
             .items_center()
             .justify_center()
-            .bg(if default { t.accent } else { t.field })
-            .hover_bg(if default { t.accent } else { t.toggled })
+            .bg(bg)
+            .hover_bg(hover)
             .on_click(on_click)
-            .child(text(label.to_string()).color(if default { Color::WHITE } else { t.text }).weight(if default { Weight::Medium } else { Weight::Regular }))
+            .child(text(label.to_string()).color(if accent { Color::WHITE } else { t.text }).weight(if default { Weight::Medium } else { Weight::Regular }))
     }
 
-    fn find_bar(&self, t: &Theme) -> Div<Self> {
+    /// A search or text field: control fill, focus ring while typing in it.
+    fn field(id: &'static str, focus: &'static str, cx: &Cx, t: &Theme) -> Div<Self> {
+        div()
+            .id(id)
+            .flex_1()
+            .min_w_0()
+            .h(24.0)
+            .rounded(7.0)
+            .bg(t.field)
+            .focus_ring(cx.is_focused(focus) && cx.window_focused, cx)
+            // Long text would spill out: single-line inputs don't scroll sideways.
+            .clip()
+            .flex_row()
+            .items_center()
+            .cursor(CursorIcon::Text)
+            .on_mouse_down(move |_: &mut Self, cx: &mut Cx| cx.focus(focus))
+    }
+
+    fn find_bar(&self, cx: &Cx, t: &Theme) -> Div<Self> {
         let count = self.doc.borrow_mut().match_count();
         let current = self.doc.borrow_mut().current_match();
         let query_set = !self.find.borrow().is_empty();
@@ -444,22 +494,14 @@ impl TextEditApp {
         };
         let icon = t.icon;
         let case = self.case_sensitive;
-        let field = div()
-            .id("find-field")
-            .flex_1()
-            .h(24.0)
-            .rounded(7.0)
-            .bg(t.field)
-            .flex_row()
-            .items_center()
+        let held = |id: &'static str| cx.hovered(id) && cx.mouse_down;
+        let field = Self::field("find-field", "find", cx, t)
             .gap(6.0)
             .pl(8.0)
             .pr(3.0)
-            .cursor(CursorIcon::Text)
-            .on_mouse_down(|_: &mut Self, cx: &mut Cx| cx.focus("find"))
             .child(canvas(move |s, b| icons::magnifier(s, b, icon)).size(14.0).shrink_0())
-            .child(input("find", &self.find).flex_1())
-            .child(text(status).size(11.0).color(t.text_secondary).shrink_0())
+            .child(input("find", &self.find).flex_1().min_w_0())
+            .child(text(status).size(11.0).color(t.text_secondary).tabular().shrink_0())
             .child(
                 div()
                     .id("match-case")
@@ -468,12 +510,18 @@ impl TextEditApp {
                     .rounded(4.0)
                     .items_center()
                     .bg_opt(case.then_some(t.toggled))
-                    .hover_bg(t.toggled)
+                    .hover_bg(if held("match-case") { t.pressed } else { t.toggled })
                     .on_click(|s: &mut Self, _| {
                         s.case_sensitive = !s.case_sensitive;
                         s.update_query();
                     })
-                    .child(text("Aa").size(11.0).weight(Weight::Semibold).color(if case { t.accent } else { t.text_secondary })),
+                    .child(text("Aa").size(11.0).weight(Weight::Semibold).color(if case && cx.window_focused {
+                        t.accent
+                    } else if case {
+                        t.text
+                    } else {
+                        t.text_secondary
+                    })),
             );
         let segment = |id: &'static str, glyph: fn(&mut Scene, Bounds, Color), forward: bool| {
             div()
@@ -482,12 +530,13 @@ impl TextEditApp {
                 .h(24.0)
                 .items_center()
                 .justify_center()
-                .hover_bg(t.toggled)
+                .hover_bg(if held(id) { t.pressed } else { t.toggled })
                 .on_click(move |s: &mut Self, _| s.find_next(forward))
                 .child(canvas(move |s, b| glyph(s, b, icon)).size(14.0))
         };
         let arrows = div()
             .flex_row()
+            .shrink_0()
             .rounded(6.0)
             .bg(t.field)
             .clip()
@@ -495,53 +544,56 @@ impl TextEditApp {
             .child(div().w(1.0).h(24.0).bg(t.separator))
             .child(segment("find-next", icons::chevron_right, true));
         let replace_on = self.replace_open;
-        let accent = t.accent;
+        // Checked boxes lose their accent in an inactive window.
+        let (box_bg, box_border, tick) = match (replace_on, cx.window_focused) {
+            (true, true) => (if held("replace-toggle") { darken(t.accent) } else { t.accent }, None, Color::WHITE),
+            (true, false) => (t.toggled, None, t.text),
+            (false, _) => (if held("replace-toggle") { t.toggled } else { t.window }, Some(t.text_tertiary), t.text),
+        };
+        let mut check_box = div().size(14.0).rounded(4.0).bg(box_bg);
+        if let Some(c) = box_border {
+            check_box = check_box.border(c, 1.0);
+        }
         let checkbox = div()
             .id("replace-toggle")
             .flex_row()
             .items_center()
-            .gap(5.0)
+            .gap(6.0)
             .on_click(|s: &mut Self, cx: &mut Cx| {
                 s.replace_open = !s.replace_open;
                 cx.focus(if s.replace_open { "replace" } else { "find" });
             })
-            .child(
-                div()
-                    .size(14.0)
-                    .rounded(4.0)
-                    .bg(if replace_on { accent } else { t.window })
-                    .border(if replace_on { accent } else { t.text_tertiary }, if replace_on { 0.0 } else { 1.0 })
-                    .child_if(replace_on, || canvas(|s, b| icons::check(s, b, Color::WHITE)).size(14.0).into()),
-            )
+            .child(check_box.child_if(replace_on, || canvas(move |s, b| icons::check(s, b, tick)).size(14.0).into()))
             .child(text("Replace"));
 
-        let row = |content: Div<Self>| content.h(FIND_ROW_H).shrink_0().flex_row().items_center().gap(8.0).px(10.0);
-        let mut bar = div()
-            .shrink_0()
-            .flex_col()
-            .bg(t.bar)
-            .border_b(t.separator)
-            .child(row(div().child(field).child(arrows).child(Self::push_button("find-done", "Done", false, t, |s, cx| s.close_find(cx))).child(checkbox)));
-        if self.replace_open {
-            let field = div()
-                .id("replace-field")
-                .flex_1()
-                .h(24.0)
-                .rounded(7.0)
-                .bg(t.field)
+        // Both rows share one column of controls, so the fields line up.
+        let row = |field: Div<Self>, controls: Div<Self>| {
+            div()
+                .h(FIND_ROW_H)
+                .shrink_0()
                 .flex_row()
                 .items_center()
-                .px(8.0)
-                .cursor(CursorIcon::Text)
-                .on_mouse_down(|_: &mut Self, cx: &mut Cx| cx.focus("replace"))
-                .child(input("replace", &self.replace).flex_1());
-            bar = bar.child(
-                row(div())
-                    .pt(0.0)
-                    .child(field)
-                    .child(Self::push_button("replace-one", "Replace", false, t, |s, _| s.replace_one()))
-                    .child(Self::push_button("replace-all", "All", false, t, |s, _| s.replace_all())),
-            );
+                .gap(8.0)
+                .px(12.0)
+                .child(field)
+                .child(controls.w(CONTROLS_W).shrink_0().flex_row().items_center().gap(8.0))
+        };
+        let mut bar = div().shrink_0().flex_col().pt(2.0).pb(2.0).bg(t.bar).border_b(t.separator).child(row(
+            field,
+            div()
+                .child(arrows)
+                .child(Self::push_button("find-done", "Done", false, cx, t, |s, cx| s.close_find(cx)))
+                .child(div().flex_1())
+                .child(checkbox),
+        ));
+        if self.replace_open {
+            let field = Self::field("replace-field", "replace", cx, t).px(8.0).child(input("replace", &self.replace).flex_1().min_w_0());
+            bar = bar.child(row(
+                field,
+                div()
+                    .child(Self::push_button("replace-one", "Replace", false, cx, t, |s, _| s.replace_one()))
+                    .child(Self::push_button("replace-all", "All", false, cx, t, |s, _| s.replace_all())),
+            ));
         }
         bar
     }
@@ -552,7 +604,7 @@ impl TextEditApp {
         let lines = doc.line_count();
         let left = match &self.load_error {
             Some(e) => text(e.clone()).size(11.0).color(t.destructive).truncate(),
-            None => text(format!("Line {line}, Column {col}")).size(11.0).color(t.text_secondary),
+            None => text(format!("Line {line}, Column {col}")).size(11.0).color(t.text_secondary).tabular(),
         };
         let right = format!("{} \u{b7} {}", if lines == 1 { "1 line".to_string() } else { format!("{} lines", group(lines)) }, if self.crlf { "CRLF" } else { "LF" });
         div()
@@ -565,16 +617,16 @@ impl TextEditApp {
             .px(12.0)
             .bg(t.window)
             .child(left)
-            .child(text(right).size(11.0).color(t.text_tertiary).shrink_0())
+            .child(text(right).size(11.0).color(t.text_secondary).tabular().shrink_0())
     }
 
     fn sheet_card(&self, sheet: Sheet, cx: &Cx, t: &Theme) -> Div<Self> {
         let card = div()
             .w(SHEET_W)
             .flex_col()
-            .p(18.0)
+            .p(20.0)
             .gap(12.0)
-            .rounded(12.0)
+            .rounded(14.0)
             .bg(t.sheet)
             .border(t.sheet_border, 0.5)
             .shadow(t.shadow, 30.0, 10.0)
@@ -592,11 +644,14 @@ impl TextEditApp {
                     div()
                         .flex_row()
                         .gap(8.0)
-                        .mt(6.0)
-                        .child(Self::push_button("dont-save", "Don\u{2019}t Save", false, t, |s, cx| s.discard_and_close(cx)))
+                        .mt(4.0)
+                        .child(Self::push_button("dont-save", "Don\u{2019}t Save", false, cx, t, |s, cx| s.discard_and_close(cx)))
                         .child(div().flex_1())
-                        .child(Self::push_button("sheet-cancel", "Cancel", false, t, |s, cx| s.close_sheet(cx)))
-                        .child(Self::push_button("sheet-ok", "Save\u{2026}", true, t, |s, cx| s.confirm_sheet(cx))),
+                        .child(Self::push_button("sheet-cancel", "Cancel", false, cx, t, |s, cx| s.close_sheet(cx)))
+                        // An untitled document asks where to save next.
+                        .child(Self::push_button("sheet-ok", if self.path.is_some() { "Save" } else { "Save\u{2026}" }, true, cx, t, |s, cx| {
+                            s.confirm_sheet(cx)
+                        })),
                 );
         }
 
@@ -626,22 +681,15 @@ impl TextEditApp {
                     .child(text(s.name.clone()).color(fg).truncate()),
             );
         }
-        let field = div()
-            .id("path-field")
-            .flex_1()
-            .h(26.0)
+        let field = Self::field("path-field", "path", cx, t)
             .rounded(6.0)
             .bg(t.window)
             .border(t.separator, 1.0)
-            .flex_row()
-            .items_center()
             .px(7.0)
-            .cursor(CursorIcon::Text)
-            .on_mouse_down(|_: &mut Self, cx: &mut Cx| cx.focus("path"))
-            .child(input("path", &self.path_field).flex_1());
+            .child(input("path", &self.path_field).flex_1().min_w_0());
         let error = self.sheet_error.clone();
         let warn = self.confirm_replace;
-        card.child(div().flex_row().items_center().gap(10.0).child(text(label).weight(Weight::Medium)).child(field))
+        card.child(div().flex_row().items_center().gap(8.0).child(text(label).shrink_0()).child(field))
             .child_if(!self.suggestions.is_empty(), || list.into())
             .child_if(error.is_some(), || {
                 text(error.clone().unwrap_or_default()).size(11.0).color(if warn { t.text_secondary } else { t.destructive }).w_full().into()
@@ -651,8 +699,8 @@ impl TextEditApp {
                     .flex_row()
                     .justify_end()
                     .gap(8.0)
-                    .child(Self::push_button("sheet-cancel", "Cancel", false, t, |s, cx| s.close_sheet(cx)))
-                    .child(Self::push_button("sheet-ok", action, true, t, |s, cx| s.confirm_sheet(cx))),
+                    .child(Self::push_button("sheet-cancel", "Cancel", false, cx, t, |s, cx| s.close_sheet(cx)))
+                    .child(Self::push_button("sheet-ok", action, true, cx, t, |s, cx| s.confirm_sheet(cx))),
             )
     }
 
@@ -680,6 +728,11 @@ pub fn spawn_window(path: Option<&Path>) {
     let _ = cmd.spawn();
 }
 
+/// A filled control held down.
+fn darken(c: Color) -> Color {
+    Color { r: c.r * 0.85, g: c.g * 0.85, b: c.b * 0.85, a: c.a }
+}
+
 fn group(n: usize) -> String {
     let s = n.to_string();
     let mut out = String::new();
@@ -703,7 +756,7 @@ impl App for TextEditApp {
         let (w, h) = cx.window_size;
         let mut root = div().w(w).h(h).flex_col().bg(t.window).text_color(t.text).child(self.toolbar(cx, &t));
         if self.find_open {
-            root = root.child(self.find_bar(&t));
+            root = root.child(self.find_bar(cx, &t));
         }
         root = root
             .child(widget("doc", &self.doc).flex_1().cursor(CursorIcon::Text))

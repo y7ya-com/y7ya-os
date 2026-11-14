@@ -1,5 +1,5 @@
-//! Control Center: connectivity, Focus and appearance toggles, display and
-//! sound sliders, and Now Playing, as rounded modules in a top-right panel.
+//! Quick Settings: Control Center's toggles, sliders and Now Playing as a
+//! flyout above the taskbar's tray.
 
 use ui::*;
 
@@ -7,20 +7,18 @@ use super::theme::Theme;
 use super::{Shell, Slider, icons};
 use crate::system::{MediaAction, Request};
 
-const WIDTH: f32 = 320.0;
-const PAD: f32 = 10.0;
+const WIDTH: f32 = 360.0;
+const PAD: f32 = 12.0;
 const HALF: f32 = (WIDTH - 3.0 * PAD) / 2.0;
 
 type Glyph = Box<dyn Fn(&mut Scene, Bounds, Color)>;
 
 impl Shell {
-    pub(super) fn control_center(&mut self, cx: &mut Cx, t: &Theme) -> Div<Self> {
-        let (w, _) = cx.window_size;
+    pub(super) fn quick_settings(&mut self, cx: &mut Cx, t: &Theme) -> Div<Self> {
         let st = self.status.clone();
         let dnd = self.store.lock().unwrap().dnd;
-        let module = || div().rounded(16.0).bg(t.module).flex_col();
+        let tile = |toggle: Div<Self>| div().w(HALF).h(56.0).px(12.0).rounded(12.0).bg(t.module).justify_center().flex_col().child(toggle);
 
-        // Wi-Fi and Bluetooth share the big module on the left.
         let wifi_on = st.wifi.enabled;
         let wifi_detail = match (&st.wifi.ssid, st.wifi.available, wifi_on) {
             (_, false, _) => "Not Available".to_string(),
@@ -29,80 +27,61 @@ impl Shell {
             (None, ..) => "Not Connected".to_string(),
         };
         let bt = st.bluetooth;
-        let connectivity = module()
-            .w(HALF)
-            .h(HALF * 0.9)
-            .px(12.0)
-            .justify_center()
-            .gap(14.0)
-            .child(self.toggle(
-                "cc-wifi",
-                "Wi-Fi",
-                wifi_detail,
-                wifi_on,
-                st.wifi.available,
-                Box::new(|s, b, c| icons::wifi(s, b, c, c.alpha(0.35), 100, true)),
-                t,
-                |s: &mut Self, _: &mut Cx| {
-                    let on = !s.status.wifi.enabled;
-                    s.status.wifi.enabled = on;
-                    s.services.optimistic(|st| st.wifi.enabled = on);
-                    s.send(Request::SetWifi(on));
-                },
-            ))
-            .child(self.toggle(
-                "cc-bluetooth",
-                "Bluetooth",
-                match bt {
-                    None => "Not Available".into(),
-                    Some(true) => "On".into(),
-                    Some(false) => "Off".into(),
-                },
-                bt == Some(true),
-                bt.is_some(),
-                Box::new(icons::bluetooth),
-                t,
-                |s: &mut Self, _: &mut Cx| {
-                    let on = s.status.bluetooth != Some(true);
-                    s.status.bluetooth = Some(on);
-                    s.services.optimistic(|st| st.bluetooth = Some(on));
-                    s.send(Request::SetBluetooth(on));
-                },
-            ));
-
-        let small = |id: &'static str, label: &str, detail: &str, on: bool, glyph: Glyph, f: fn(&mut Self, &mut Cx)| {
-            module()
-                .w(HALF)
-                .flex_1()
-                .px(12.0)
-                .justify_center()
-                .child(self.toggle(id, label, detail.to_string(), on, true, glyph, t, f))
-        };
-        let right = div()
-            .flex_col()
-            .gap(PAD)
-            .h(HALF * 0.9)
-            .child(small("cc-focus", "Focus", if dnd { "Do Not Disturb" } else { "Off" }, dnd, Box::new(icons::moon), |s, _| {
-                let on = !s.store.lock().unwrap().dnd;
-                s.set_dnd(on);
-            }))
-            .child(small("cc-dark", "Dark Mode", if cx.dark { "On" } else { "Off" }, cx.dark, Box::new(icons::appearance), |s, cx| {
-                cx.dark = !cx.dark;
-                s.send(Request::SetDark(cx.dark));
-            }));
+        let wifi = self.toggle(
+            "cc-wifi",
+            "Wi-Fi",
+            wifi_detail,
+            wifi_on,
+            st.wifi.available,
+            Box::new(|s, b, c| icons::wifi(s, b, c, c.alpha(0.35), 100, true)),
+            t,
+            |s: &mut Self, _: &mut Cx| {
+                let on = !s.status.wifi.enabled;
+                s.status.wifi.enabled = on;
+                s.services.optimistic(|st| st.wifi.enabled = on);
+                s.send(Request::SetWifi(on));
+            },
+        );
+        let bluetooth = self.toggle(
+            "cc-bluetooth",
+            "Bluetooth",
+            match bt {
+                None => "Not Available".into(),
+                Some(true) => "On".into(),
+                Some(false) => "Off".into(),
+            },
+            bt == Some(true),
+            bt.is_some(),
+            Box::new(icons::bluetooth),
+            t,
+            |s: &mut Self, _: &mut Cx| {
+                let on = s.status.bluetooth != Some(true);
+                s.status.bluetooth = Some(on);
+                s.services.optimistic(|st| st.bluetooth = Some(on));
+                s.send(Request::SetBluetooth(on));
+            },
+        );
+        let focus = self.toggle("cc-focus", "Focus", if dnd { "Do Not Disturb" } else { "Off" }.into(), dnd, true, Box::new(icons::moon), t, |s, _| {
+            let on = !s.store.lock().unwrap().dnd;
+            s.set_dnd(on);
+        });
+        let dark = self.toggle("cc-dark", "Dark Mode", if cx.dark { "On" } else { "Off" }.into(), cx.dark, true, Box::new(icons::appearance), t, |s, cx| {
+            cx.dark = !cx.dark;
+            s.send(Request::SetDark(cx.dark));
+        });
 
         let mut col = div()
-            .absolute(w - WIDTH - 8.0, 2.0)
             .w(WIDTH)
             .flex_col()
             .gap(PAD)
             .p(PAD)
-            .rounded(22.0)
+            .rounded(14.0)
             .bg(t.panel)
             .border(t.border, 0.5)
             .shadow(t.shadow, 30.0, 10.0)
             .occlude()
-            .child(div().flex_row().gap(PAD).child(connectivity).child(right));
+            .child(div().flex_row().gap(PAD).child(tile(wifi)).child(tile(bluetooth)))
+            .child(div().flex_row().gap(PAD).child(tile(focus)).child(tile(dark)));
 
         if let Some(level) = st.brightness {
             col = col.child(self.slider_module("Display", Slider::Brightness, level, false, t));
@@ -110,7 +89,22 @@ impl Shell {
         if let Some(v) = st.volume {
             col = col.child(self.slider_module("Sound", Slider::Volume, if v.muted { 0.0 } else { v.level }, v.muted, t));
         }
-        col.child(self.now_playing(t))
+        col = col.child(self.now_playing(t));
+        if let Some(bat) = st.battery {
+            let ink = t.label;
+            let fill = if bat.charging { t.success } else if bat.percent <= 20 { t.destructive } else { ink };
+            let label = if bat.charging { format!("{}% \u{00b7} Charging", bat.percent) } else { format!("{}%", bat.percent) };
+            col = col.child(
+                div()
+                    .flex_row()
+                    .items_center()
+                    .gap(4.0)
+                    .h(20.0)
+                    .child(canvas(move |s, b| icons::battery(s, b, ink, fill, bat.percent, bat.charging)).w(30.0).h(20.0))
+                    .child(text(label).size(12.0).color(t.secondary)),
+            );
+        }
+        col
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -179,7 +173,7 @@ impl Shell {
             }
         };
         div()
-            .rounded(16.0)
+            .rounded(12.0)
             .bg(t.module)
             .flex_col()
             .gap(8.0)
@@ -284,7 +278,7 @@ impl Shell {
                 .into()
             });
         div()
-            .rounded(16.0)
+            .rounded(12.0)
             .bg(t.module)
             .flex_row()
             .items_center()

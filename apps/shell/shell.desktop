@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=y7ya-os Shell
-Comment=Menu bar, Spotlight, Control Center and notifications
+Comment=Taskbar, Start menu, Spotlight, Quick Settings and notifications
 Exec=y7-shell
 Icon=y7ya-shell
 Terminal=false

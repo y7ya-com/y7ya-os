@@ -433,6 +433,7 @@ impl<S> super::element::Hitbox<S> {
         self.on_mouse_down.is_none()
             && self.on_click.is_none()
             && self.on_right_click.is_none()
+            && self.on_middle_click.is_none()
             && self.on_double_click.is_none()
             && !self.window_drag
             && self.cursor.is_none()

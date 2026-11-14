@@ -1,4 +1,4 @@
-//! `y7-shell`: the y7ya-os menu bar, Spotlight, Control Center and
+//! `y7-shell`: the y7ya-os taskbar, Start menu, Spotlight, Quick Settings and
 //! notifications, in one long-running process on wlr-layer-shell.
 //!
 //! - `y7-shell` runs it (one per session).
@@ -8,6 +8,7 @@
 //! `Y7_SHELL_FAKE=1` swaps the real machine for an in-memory one (no Wi-Fi
 //! toggling or shutting down while testing).
 
+mod app_icons;
 mod apps;
 mod calc;
 mod files;
@@ -16,6 +17,7 @@ mod notify;
 mod search;
 mod shell;
 mod system;
+mod taskbar;
 mod toplevel;
 
 use std::path::PathBuf;
@@ -70,10 +72,15 @@ fn main() {
             }
             let system: Arc<dyn System> =
                 if std::env::var("Y7_SHELL_FAKE").is_ok_and(|v| !v.is_empty() && v != "0") { Arc::new(FakeSystem::demo()) } else { Arc::new(RealSystem) };
-            let cfg = Config { system, services: true, files_root: dirs::home_dir() };
+            let cfg = Config { system, services: true, files_root: dirs::home_dir(), data_dir: data_dir() };
             ui::run_layer(shell::bar_options(), move |cx| Shell::new(cfg, cx));
         }
     }
+}
+
+/// `~/.local/share/y7-shell`, or `$Y7_SHELL_DATA_DIR`.
+fn data_dir() -> Option<PathBuf> {
+    std::env::var_os("Y7_SHELL_DATA_DIR").map(PathBuf::from).or_else(|| dirs::data_dir().map(|d| d.join("y7-shell")))
 }
 
 /// Renders every surface with demo content, for checking the look.
@@ -82,24 +89,29 @@ fn snapshots(dir: &std::path::Path, dark: bool) {
     let suffix = if dark { "dark" } else { "light" };
     let screen = (1440.0, 900.0 - shell::BAR_H);
     let make = |cx: &mut ui::Cx| {
-        let cfg = Config { system: Arc::new(FakeSystem::demo()), services: false, files_root: None };
+        // Default pins, not the user's.
+        let cfg = Config { system: Arc::new(FakeSystem::demo()), services: false, files_root: None, data_dir: None };
         let mut s = Shell::new(cfg, cx);
         s.wait_for_status();
         demo_notifications(&s);
+        s.windows = demo_windows();
+        s.preload_icons();
         s
     };
-    let shots: [(&str, &str, (f32, f32), Panel); 5] = [
-        ("menubar", shell::BAR, (1440.0, shell::BAR_H), Panel::None),
+    let shots: [(&str, &str, (f32, f32), Panel); 7] = [
+        ("taskbar", shell::BAR, (1440.0, shell::BAR_H), Panel::None),
+        ("start", shell::PANEL, screen, Panel::Start),
         ("spotlight", shell::PANEL, screen, Panel::Spotlight),
-        ("control-center", shell::PANEL, screen, Panel::ControlCenter),
-        ("notification-center", shell::PANEL, screen, Panel::NotificationCenter),
+        ("quick-settings", shell::PANEL, screen, Panel::QuickSettings),
+        ("calendar", shell::PANEL, screen, Panel::Calendar),
+        ("confirm", shell::PANEL, screen, Panel::Confirm(system::SessionAction::ShutDown)),
         ("banners", shell::BANNERS, (388.0, 260.0), Panel::None),
     ];
     for (name, layer, size, panel) in shots {
         let path = dir.join(format!("{name}-{suffix}.png"));
         ui::snapshot_layer(layer, size, 2.0, dark, &path, make, |s, cx| {
             if panel != Panel::None {
-                s.open(panel, cx);
+                s.open_now(panel, cx);
             }
             if panel == Panel::Spotlight {
                 s.set_query("te", cx);
@@ -107,6 +119,21 @@ fn snapshots(dir: &std::path::Path, dark: bool) {
         });
         println!("{}", path.display());
     }
+}
+
+/// A few windows of apps most machines have, one active and one minimized.
+fn demo_windows() -> Vec<toplevel::Window> {
+    let w = |id, app_id: &str, title: &str| toplevel::Window { id, app_id: app_id.into(), title: title.into(), ..Default::default() };
+    let mut windows = vec![
+        w(1, "notes", "Notes"),
+        w(2, "org.kde.konsole", "~ : zsh \u{2014} Konsole"),
+        w(3, "files", "Documents"),
+        w(4, "textedit", "Quarterly plan draft.txt"),
+        w(5, "org.kde.konsole", "cargo build \u{2014} Konsole"),
+    ];
+    windows[1].activated = true;
+    windows[3].minimized = true;
+    windows
 }
 
 fn demo_notifications(s: &Shell) {

@@ -11,6 +11,7 @@ pub mod layer;
 mod platform;
 mod renderer;
 mod scene;
+mod opacity;
 mod scroll;
 mod text;
 mod widget;

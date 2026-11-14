@@ -5053,6 +5053,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "dirs",
+ "resvg",
  "ui",
  "wayland-client",
  "wayland-protocols-wlr",

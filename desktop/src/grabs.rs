@@ -84,10 +84,22 @@ impl PointerGrab<Desk> for MoveGrab {
     ) {
         handle.motion(data, None, event);
         let delta = event.location - self.start_data.location;
+        // Dragging a tiled or zoomed window gives it back its own size, with
+        // the title bar staying under the pointer.
+        if delta.x.abs() + delta.y.abs() > 6.0 {
+            if let Some(loc) = data.untile(&self.window, self.start_data.location) {
+                self.initial_loc = loc;
+            }
+        }
         let mut loc = (self.initial_loc.to_f64() + delta).to_i32_round::<i32>();
         // Like macOS, a title bar can't be dragged above the top of the screen.
         loc.y = loc.y.max(data.min_content_y(&self.window));
         data.space.map_element(self.window.clone(), loc, true);
+        // Near an edge, show where the window would tile.
+        let preview = data.snap_zone(event.location);
+        if preview != data.snap_preview {
+            data.snap_preview = preview;
+        }
         data.redraw();
     }
 
@@ -95,6 +107,9 @@ impl PointerGrab<Desk> for MoveGrab {
         handle.button(data, event);
         if !handle.current_pressed().contains(&BTN_LEFT) {
             handle.unset_grab(self, data, event.serial, event.time, true);
+            if let Some(rect) = data.snap_preview.take() {
+                data.tile(&self.window, rect);
+            }
         }
     }
 

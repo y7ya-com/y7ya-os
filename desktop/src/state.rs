@@ -43,6 +43,8 @@ pub struct Minimizing {
 pub const OPEN_SPRING: (f64, f64) = (0.36, 0.8);
 pub const MINIMIZE_SPRING: (f64, f64) = (0.42, 1.0);
 pub const ZOOM_SPRING: (f64, f64) = (0.38, 0.92);
+/// Margin around and between tiled windows (macOS keeps a little air).
+pub const TILE_GAP: i32 = 8;
 
 /// Height of the title bar drawn above windows that let us decorate them.
 pub const TITLEBAR_H: i32 = 32;
@@ -97,6 +99,8 @@ pub struct Desk {
     pub popups: PopupManager,
     pub minimized: Vec<Window>,
     pub minimizing: Vec<Minimizing>,
+    /// Where a window being dragged would tile if dropped now.
+    pub snap_preview: Option<Rectangle<i32, Logical>>,
     /// New windows wait here until their first frame arrives.
     pub unmapped: Vec<Window>,
 
@@ -193,6 +197,7 @@ impl Desk {
             popups: PopupManager::default(),
             minimized: Vec::new(),
             minimizing: Vec::new(),
+            snap_preview: None,
             unmapped: Vec::new(),
             compositor_state,
             xdg_shell_state,
@@ -471,6 +476,79 @@ impl Desk {
             data.borrow_mut().morph = Some((from, to, Anim::spring(0.0, 1.0, r, d), false));
         }
         self.redraw();
+    }
+
+    /// The tiling target for a window dragged to `p`: the left or right half
+    /// at the side edges, the whole screen at the top.
+    pub fn snap_zone(&self, p: Point<f64, Logical>) -> Option<Rectangle<i32, Logical>> {
+        let a = self.usable_area();
+        let edge = 6.0;
+        let gap = TILE_GAP;
+        let inner = Rectangle::<i32, Logical>::new(
+            (a.loc.x + gap, a.loc.y + gap).into(),
+            (a.size.w - 2 * gap, a.size.h - 2 * gap).into(),
+        );
+        let half = (inner.size.w - gap) / 2;
+        if p.x <= a.loc.x as f64 + edge {
+            Some(Rectangle::new(inner.loc, (half, inner.size.h).into()))
+        } else if p.x >= (a.loc.x + a.size.w) as f64 - edge {
+            Some(Rectangle::new((inner.loc.x + half + gap, inner.loc.y).into(), (half, inner.size.h).into()))
+        } else if p.y <= a.loc.y as f64 + edge {
+            Some(inner)
+        } else {
+            None
+        }
+    }
+
+    /// Fits a window's frame into `rect` (from [`snap_zone`]).
+    pub fn tile(&mut self, window: &Window, rect: Rectangle<i32, Logical>) {
+        let Some(toplevel) = window.toplevel() else { return };
+        let Some(loc) = self.space.element_location(window) else { return };
+        let data = win_data(window);
+        let from = frame_of(window, loc).to_f64();
+        if data.borrow().restore.is_none() {
+            data.borrow_mut().restore = Some(Rectangle::new(loc, window.geometry().size));
+        }
+        let top = if is_ssd(window) { TITLEBAR_H } else { 0 };
+        toplevel.with_pending_state(|s| {
+            s.states.set(xdg_toplevel::State::TiledLeft);
+            s.states.set(xdg_toplevel::State::TiledRight);
+            s.states.set(xdg_toplevel::State::TiledTop);
+            s.states.set(xdg_toplevel::State::TiledBottom);
+            s.size = Some((rect.size.w, rect.size.h - top).into());
+        });
+        toplevel.send_pending_configure();
+        self.space.map_element(window.clone(), (rect.loc.x, rect.loc.y + top), true);
+        let (r, d) = ZOOM_SPRING;
+        data.borrow_mut().morph = Some((from, rect.to_f64(), Anim::spring(0.0, 1.0, r, d), false));
+        self.focus(Some(window.clone()));
+    }
+
+    /// Gives a tiled or zoomed window its own size back while it's being
+    /// dragged by `pointer`. Returns its new location if it changed.
+    pub fn untile(&mut self, window: &Window, pointer: Point<f64, Logical>) -> Option<Point<i32, Logical>> {
+        let restore = win_data(window).borrow_mut().restore.take()?;
+        let toplevel = window.toplevel()?;
+        let loc = self.space.element_location(window)?;
+        let width = window.geometry().size.w.max(1) as f64;
+        // Keep the grab point at the same fraction across the title bar.
+        let frac = ((pointer.x - loc.x as f64) / width).clamp(0.0, 1.0);
+        toplevel.with_pending_state(|s| {
+            for st in [
+                xdg_toplevel::State::Maximized,
+                xdg_toplevel::State::TiledLeft,
+                xdg_toplevel::State::TiledRight,
+                xdg_toplevel::State::TiledTop,
+                xdg_toplevel::State::TiledBottom,
+            ] {
+                s.states.unset(st);
+            }
+            s.size = Some(restore.size);
+        });
+        toplevel.send_pending_configure();
+        let new_loc = Point::from(((pointer.x - frac * restore.size.w as f64) as i32, loc.y));
+        self.space.map_element(window.clone(), new_loc, true);
+        Some(new_loc)
     }
 
     /// Maps a window, cascading new ones from the top-left like macOS.

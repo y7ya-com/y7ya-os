@@ -403,7 +403,13 @@ pub fn elements(desk: &mut Desk, look: &mut Look, renderer: &mut GlesRenderer) -
     }
 
     let windows = desk.visible_windows();
+    // The tiling preview goes right under the window being dragged (the top one).
+    let mut preview = desk.snap_preview;
+    let mut first = true;
     for (window, loc, slide) in windows.iter().rev() {
+        if !std::mem::take(&mut first) {
+            push_snap_preview(&mut cx, preview.take(), &mut out);
+        }
         let frame = frame_of(window, *loc).to_f64();
         let (open, morph) = {
             let mut data = win_data(window).borrow_mut();
@@ -446,6 +452,8 @@ pub fn elements(desk: &mut Desk, look: &mut Look, renderer: &mut GlesRenderer) -
         draw_window(desk, &mut cx, window, *loc, xf, alpha, active, &mut out);
     }
 
+    push_snap_preview(&mut cx, preview.take(), &mut out);
+
     if mc > 0.0 {
         // Dim the desktop behind Mission Control.
         let dim = cx.look.rect("mc-dim", out_geo, (mc * 0.45) as f32, scale, 0.0, [0.0, 0.0, 0.0, 1.0], [0.0; 4], 0.0);
@@ -470,6 +478,17 @@ pub fn elements(desk: &mut Desk, look: &mut Look, renderer: &mut GlesRenderer) -
         }
     }
     out
+}
+
+fn push_snap_preview(cx: &mut Ctx, rect: Option<Rectangle<i32, Logical>>, out: &mut Vec<DeskElement>) {
+    let Some(rect) = rect else { return };
+    let (fill, border) = if cx.dark {
+        ([1.0, 1.0, 1.0, 0.14], [1.0, 1.0, 1.0, 0.45])
+    } else {
+        ([1.0, 1.0, 1.0, 0.32], [1.0, 1.0, 1.0, 0.75])
+    };
+    let scale = cx.scale;
+    out.push(DeskElement::Shader(cx.look.rect("snap", rect, 1.0, scale, RADIUS, fill, border, 1.0)));
 }
 
 /// One window: popups, title bar, contents and shadow, under transform `xf`.

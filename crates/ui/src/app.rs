@@ -138,6 +138,8 @@ pub fn snapshot<A: App>(
     cx.scale = scale;
     cx.dark = dark;
     cx.transparent = false;
+    // UI_SNAPSHOT_INACTIVE=1 renders the window as it looks without focus.
+    cx.window_focused = std::env::var_os("UI_SNAPSHOT_INACTIVE").is_none();
     let mut renderer = Renderer::new_headless();
     let mut app = make(&mut cx);
     setup(&mut app, &mut cx);

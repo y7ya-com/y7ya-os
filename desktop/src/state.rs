@@ -453,14 +453,10 @@ impl Desk {
     pub fn spawn(&self, cmd: &str) {
         let mut parts = cmd.split_whitespace();
         let Some(program) = parts.next() else { return };
-        let mut command = std::process::Command::new(program);
-        // Qt apps only load KDE's theme (and the user's colors) when told to,
-        // since the desktop isn't KDE.
-        if std::path::Path::new("/usr/lib/qt6/plugins/platformthemes/KDEPlasmaPlatformTheme6.so").exists() {
-            command.env("QT_QPA_PLATFORMTHEME", "kde");
-        }
-        let result = command
+        let result = std::process::Command::new(program)
             .args(parts)
+            // Qt, GTK and cursors in the Mac look, in the current appearance.
+            .envs(settings::look::env(self.dark))
             .env("WAYLAND_DISPLAY", &self.socket_name)
             .env_remove("DISPLAY")
             .envs(self.x_display.iter().map(|d| ("DISPLAY", d.as_str())))

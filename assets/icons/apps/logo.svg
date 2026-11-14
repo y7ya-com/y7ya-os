@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- The y7ya-os logo: a "y" whose long stroke is also the stem of a "7".
+       Same geometry as shell.svg, scaled up to fill the canvas. -->
+  <defs>
+    <linearGradient id="mark" x1="330" y1="290" x2="690" y2="740" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3fd8ff"/>
+      <stop offset=".45" stop-color="#4a6bff"/>
+      <stop offset=".78" stop-color="#9a4dff"/>
+      <stop offset="1" stop-color="#ff4f9a"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(512 512) scale(1.55) translate(-512 -511)" fill="none" stroke="url(#mark)" stroke-width="88" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M342 300L546 544"/>
+    <path d="M492 300H682L452 722"/>
+  </g>
+</svg>

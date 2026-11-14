@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- y7ya-os system UI: the y7 mark on a night-blue tile -->
+  <defs>
+    <!-- macOS icon template: 824px continuous-corner square, 100px margin -->
+    <path id="shape" d="M640.6 100C722.2 100 763 104.1 799.8 112.1L806.9 113.9C854.9 131.3 892.7 169.1 910.1 217.1L911.9 224.2C919.9 261 924 301.8 924 383.4L924 640.6C924 722.2 919.9 763 911.9 799.8L910.1 806.9C892.7 854.9 854.9 892.7 806.9 910.1L799.8 911.9C763 919.9 722.2 924 640.6 924L383.4 924C301.8 924 261 919.9 224.2 911.9L217.1 910.1C169.1 892.7 131.3 854.9 113.9 806.9L112.1 799.8C104.1 763 100 722.2 100 640.6L100 383.4C100 301.8 104.1 261 112.1 224.2L113.9 217.1C131.3 169.1 169.1 131.3 217.1 113.9L224.2 112.1C261 104.1 301.8 100 383.4 100Z"/>
+    <clipPath id="clip"><use xlink:href="#shape"/></clipPath>
+    <filter id="drop" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dy="12" stdDeviation="14" flood-opacity=".3"/>
+    </filter>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".5"/>
+      <stop offset=".3" stop-color="#fff" stop-opacity="0"/>
+      <stop offset=".75" stop-color="#000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000" stop-opacity=".25"/>
+    </linearGradient>
+    <linearGradient id="base" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#36459a"/>
+      <stop offset="1" stop-color="#111739"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="512" cy="540" r="380" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6a7dff" stop-opacity=".45"/>
+      <stop offset="1" stop-color="#6a7dff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="mark" x1="330" y1="290" x2="690" y2="740" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#63e6ff"/>
+      <stop offset=".45" stop-color="#5b7cff"/>
+      <stop offset=".78" stop-color="#a45cff"/>
+      <stop offset="1" stop-color="#ff62a5"/>
+    </linearGradient>
+    <filter id="halo" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
+      <feDropShadow dy="10" stdDeviation="16" flood-color="#050818" flood-opacity=".6"/>
+    </filter>
+  </defs>
+  <use xlink:href="#shape" fill="url(#base)" filter="url(#drop)"/>
+  <g clip-path="url(#clip)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#glow)"/>
+  </g>
+  <!-- the mark: a "y" whose long stroke is also the stem of a "7" -->
+  <g fill="none" stroke="url(#mark)" stroke-width="88" stroke-linecap="round" stroke-linejoin="round" filter="url(#halo)">
+    <path d="M342 300L546 544"/>
+    <path d="M492 300H682L452 722"/>
+  </g>
+  <use xlink:href="#shape" fill="none" stroke="url(#rim)" stroke-width="8" clip-path="url(#clip)"/>
+</svg>

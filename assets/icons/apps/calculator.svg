@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Calculator: a dark keypad with orange operator keys -->
+  <defs>
+    <!-- macOS icon template: 824px continuous-corner square, 100px margin -->
+    <path id="shape" d="M640.6 100C722.2 100 763 104.1 799.8 112.1L806.9 113.9C854.9 131.3 892.7 169.1 910.1 217.1L911.9 224.2C919.9 261 924 301.8 924 383.4L924 640.6C924 722.2 919.9 763 911.9 799.8L910.1 806.9C892.7 854.9 854.9 892.7 806.9 910.1L799.8 911.9C763 919.9 722.2 924 640.6 924L383.4 924C301.8 924 261 919.9 224.2 911.9L217.1 910.1C169.1 892.7 131.3 854.9 113.9 806.9L112.1 799.8C104.1 763 100 722.2 100 640.6L100 383.4C100 301.8 104.1 261 112.1 224.2L113.9 217.1C131.3 169.1 169.1 131.3 217.1 113.9L224.2 112.1C261 104.1 301.8 100 383.4 100Z"/>
+    <clipPath id="clip"><use xlink:href="#shape"/></clipPath>
+    <filter id="drop" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dy="12" stdDeviation="14" flood-opacity=".3"/>
+    </filter>
+    <filter id="lift" x="-20%" y="-20%" width="140%" height="150%" color-interpolation-filters="sRGB">
+      <feDropShadow dy="8" stdDeviation="7" flood-opacity=".45"/>
+    </filter>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".45"/>
+      <stop offset=".3" stop-color="#fff" stop-opacity="0"/>
+      <stop offset=".75" stop-color="#000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000" stop-opacity=".3"/>
+    </linearGradient>
+    <linearGradient id="base" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5a5a61"/>
+      <stop offset="1" stop-color="#29292d"/>
+    </linearGradient>
+    <linearGradient id="dark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6c6c73"/>
+      <stop offset="1" stop-color="#4c4c52"/>
+    </linearGradient>
+    <linearGradient id="light" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e6e6ea"/>
+      <stop offset="1" stop-color="#b4b4bb"/>
+    </linearGradient>
+    <linearGradient id="orange" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffb648"/>
+      <stop offset="1" stop-color="#ff8400"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".35"/>
+      <stop offset=".5" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <use xlink:href="#shape" fill="url(#base)" filter="url(#drop)"/>
+  <!-- 3×3 keys, 150px with 35px gaps; operators in the right column -->
+  <g filter="url(#lift)">
+    <rect x="252" y="252" width="150" height="150" rx="56" fill="url(#light)"/>
+    <rect x="437" y="252" width="150" height="150" rx="56" fill="url(#light)"/>
+    <rect x="252" y="437" width="150" height="150" rx="56" fill="url(#dark)"/>
+    <rect x="437" y="437" width="150" height="150" rx="56" fill="url(#dark)"/>
+    <rect x="252" y="622" width="150" height="150" rx="56" fill="url(#dark)"/>
+    <rect x="437" y="622" width="150" height="150" rx="56" fill="url(#dark)"/>
+    <rect x="622" y="252" width="150" height="150" rx="56" fill="url(#orange)"/>
+    <rect x="622" y="437" width="150" height="150" rx="56" fill="url(#orange)"/>
+    <rect x="622" y="622" width="150" height="150" rx="56" fill="url(#orange)"/>
+  </g>
+  <!-- top sheen on every key -->
+  <g fill="none" stroke="url(#sheen)" stroke-width="4">
+    <rect x="254" y="254" width="146" height="146" rx="54"/>
+    <rect x="439" y="254" width="146" height="146" rx="54"/>
+    <rect x="624" y="254" width="146" height="146" rx="54"/>
+    <rect x="254" y="439" width="146" height="146" rx="54"/>
+    <rect x="439" y="439" width="146" height="146" rx="54"/>
+    <rect x="624" y="439" width="146" height="146" rx="54"/>
+    <rect x="254" y="624" width="146" height="146" rx="54"/>
+    <rect x="439" y="624" width="146" height="146" rx="54"/>
+    <rect x="624" y="624" width="146" height="146" rx="54"/>
+  </g>
+  <!-- glyphs: plus-minus and percent on the light keys, −, + and = on orange -->
+  <g fill="none" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M301 306H353M327 280V332M301 370H353" stroke="#3a3a40"/>
+    <path d="M536 306L488 348" stroke="#3a3a40"/>
+    <path d="M664 327H730M664 512H730M697 479V545M664 678H730M664 716H730" stroke="#fff"/>
+  </g>
+  <g fill="#3a3a40">
+    <circle cx="484" cy="306" r="13"/>
+    <circle cx="540" cy="348" r="13"/>
+  </g>
+  <use xlink:href="#shape" fill="none" stroke="url(#rim)" stroke-width="8" clip-path="url(#clip)"/>
+</svg>

@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Preview: two photo prints and a magnifier -->
+  <defs>
+    <!-- macOS icon template: 824px continuous-corner square, 100px margin -->
+    <path id="shape" d="M640.6 100C722.2 100 763 104.1 799.8 112.1L806.9 113.9C854.9 131.3 892.7 169.1 910.1 217.1L911.9 224.2C919.9 261 924 301.8 924 383.4L924 640.6C924 722.2 919.9 763 911.9 799.8L910.1 806.9C892.7 854.9 854.9 892.7 806.9 910.1L799.8 911.9C763 919.9 722.2 924 640.6 924L383.4 924C301.8 924 261 919.9 224.2 911.9L217.1 910.1C169.1 892.7 131.3 854.9 113.9 806.9L112.1 799.8C104.1 763 100 722.2 100 640.6L100 383.4C100 301.8 104.1 261 112.1 224.2L113.9 217.1C131.3 169.1 169.1 131.3 217.1 113.9L224.2 112.1C261 104.1 301.8 100 383.4 100Z"/>
+    <clipPath id="clip"><use xlink:href="#shape"/></clipPath>
+    <filter id="drop" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dy="12" stdDeviation="14" flood-opacity=".3"/>
+    </filter>
+    <filter id="lift" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dy="10" stdDeviation="12" flood-color="#06384a" flood-opacity=".35"/>
+    </filter>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".6"/>
+      <stop offset=".3" stop-color="#fff" stop-opacity="0"/>
+      <stop offset=".75" stop-color="#000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000" stop-opacity=".2"/>
+    </linearGradient>
+    <linearGradient id="base" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5fd6e6"/>
+      <stop offset="1" stop-color="#178fb8"/>
+    </linearGradient>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7ec3ff"/>
+      <stop offset="1" stop-color="#d6ecff"/>
+    </linearGradient>
+    <linearGradient id="dusk" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff9a76"/>
+      <stop offset="1" stop-color="#ffd59a"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5a5e68"/>
+      <stop offset="1" stop-color="#25272d"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".55"/>
+      <stop offset=".5" stop-color="#e6f6ff" stop-opacity=".2"/>
+      <stop offset="1" stop-color="#fff" stop-opacity=".35"/>
+    </linearGradient>
+  </defs>
+  <use xlink:href="#shape" fill="url(#base)" filter="url(#drop)"/>
+  <!-- back print: sunset -->
+  <g filter="url(#lift)">
+    <g transform="rotate(9 560 400)">
+      <rect x="350" y="230" width="420" height="340" rx="18" fill="#fff"/>
+      <rect x="376" y="256" width="368" height="288" rx="6" fill="url(#dusk)"/>
+      <circle cx="560" cy="470" r="62" fill="#fff3c4"/>
+      <path d="M376 470C450 440 520 500 600 470S700 440 744 460V538a6 6 0 0 1-6 6H382a6 6 0 0 1-6-6Z" fill="#c9566b"/>
+    </g>
+  </g>
+  <!-- front print: hills under a blue sky -->
+  <g filter="url(#lift)">
+    <g transform="rotate(-7 440 560)">
+      <rect x="220" y="380" width="440" height="356" rx="18" fill="#fff"/>
+      <rect x="246" y="406" width="388" height="304" rx="6" fill="url(#sky)"/>
+      <circle cx="560" cy="480" r="38" fill="#ffd23f"/>
+      <path d="M246 640C300 560 360 540 420 600S520 560 634 620V704a6 6 0 0 1-6 6H252a6 6 0 0 1-6-6Z" fill="#46b06a"/>
+      <path d="M246 680C330 630 420 650 500 690S600 690 634 676V704a6 6 0 0 1-6 6H252a6 6 0 0 1-6-6Z" fill="#2c8a50"/>
+    </g>
+  </g>
+  <!-- the magnifier -->
+  <g filter="url(#lift)">
+    <path d="M708 708L808 808" stroke="url(#ring)" stroke-width="64" stroke-linecap="round"/>
+    <circle cx="628" cy="628" r="128" fill="url(#glass)"/>
+    <circle cx="628" cy="628" r="128" fill="none" stroke="url(#ring)" stroke-width="36"/>
+  </g>
+  <path d="M552 584A92 92 0 0 1 616 538" fill="none" stroke="#fff" stroke-opacity=".85" stroke-width="16" stroke-linecap="round"/>
+  <use xlink:href="#shape" fill="none" stroke="url(#rim)" stroke-width="8" clip-path="url(#clip)"/>
+</svg>

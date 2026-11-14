@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use engine::{Const, Engine, Func, Key, Op, key_for_char};
 use ui::Key as WinitKey;
+use ui::widgets::{Menu, MenuItem, MenuKey};
 use ui::*;
 
 /// macOS Calculator keeps its dark look in both appearances.
@@ -18,9 +19,9 @@ const SCIENTIFIC: u32 = 0x2c2c2e;
 const SCIENTIFIC_PRESSED: u32 = 0x515154;
 const OPERATOR: u32 = 0xff9f0a;
 const OPERATOR_PRESSED: u32 = 0xfcc78d;
-const MENU_BG: u32 = 0x2c2c2e;
-const ACCENT: u32 = 0x0a84ff;
 
+/// Space above the display at the default size; the traffic lights sit in
+/// it (and over the display's empty top), placed as in a toolbar window.
 const HEADER_H: f32 = 32.0;
 const PAD: f32 = 12.0;
 const GAP: f32 = 9.0;
@@ -69,7 +70,8 @@ enum Label {
 pub struct CalculatorApp {
     pub engine: Engine,
     mode: Mode,
-    menu_open: bool,
+    /// The Basic / Scientific menu from the calculator key.
+    menu: Option<Menu<Mode>>,
     /// A key pressed on the keyboard, shown pressed for a moment.
     flash: Option<(Key, Instant)>,
 }
@@ -77,14 +79,14 @@ pub struct CalculatorApp {
 impl CalculatorApp {
     pub fn new(mode: Mode, cx: &mut Cx) -> Self {
         cx.window_radius = 10.0;
-        let mut app = Self { engine: Engine::new(), mode: Mode::Basic, menu_open: false, flash: None };
+        let mut app = Self { engine: Engine::new(), mode: Mode::Basic, menu: None, flash: None };
         app.engine.max_digits = digits_for(mode);
         app.mode = mode;
         app
     }
 
     fn set_mode(&mut self, mode: Mode, cx: &mut Cx) {
-        self.menu_open = false;
+        self.menu = None;
         if mode != self.mode {
             self.mode = mode;
             self.engine.max_digits = digits_for(mode);
@@ -94,7 +96,7 @@ impl CalculatorApp {
     }
 
     pub fn press(&mut self, key: Key) {
-        self.menu_open = false;
+        self.menu = None;
         self.engine.press(key);
     }
 
@@ -112,7 +114,7 @@ impl CalculatorApp {
 
     fn paste(&mut self, cx: &mut Cx) {
         if let Some(text) = cx.clipboard.as_mut().and_then(|cb| cb.get_text().ok()) {
-            self.menu_open = false;
+            self.menu = None;
             self.engine.paste(&text);
         }
     }
@@ -126,14 +128,15 @@ impl CalculatorApp {
         };
         let value = self.engine.display();
         let style = TextStyle { size: base, line_height: 1.15, weight: Weight::Regular, color: Color::WHITE };
-        // Shrink the digits to fit, like macOS.
-        let (w, _) = cx.text.measure(&value, &style, None, false);
+        // Shrink the digits to fit, like macOS. Figures are fixed-width so
+        // the number doesn't jitter as digits change.
+        let (w, _) = cx.text.measure_with(&value, &style, None, false, true);
         let size = if w > width { (base * width / w).floor().max(16.0) } else { base };
 
         let expr_style = TextStyle { size: 17.0, line_height: 1.3, weight: Weight::Regular, color: Color::WHITE.alpha(0.5) };
         let mut expr = self.engine.expression();
         // Long expressions keep their end in view.
-        while !expr.is_empty() && cx.text.measure(&expr, &expr_style, None, false).0 > width {
+        while !expr.is_empty() && cx.text.measure_with(&expr, &expr_style, None, false, true).0 > width {
             let mut chars = expr.chars();
             chars.next();
             chars.next();
@@ -157,13 +160,14 @@ impl CalculatorApp {
                     .items_center()
                     .justify_between()
                     .child(text(if rad { "Rad" } else { "" }).size(13.0).color(Color::WHITE.alpha(0.6)))
-                    .child(text(expr).size(17.0).color(Color::WHITE.alpha(0.5))),
+                    .child(text(expr).size(17.0).tabular().color(Color::WHITE.alpha(0.5))),
             )
-            .child(text(value).size(size).line_height(1.15).color(Color::WHITE))
+            .child(text(value).size(size).line_height(1.15).tabular().color(Color::WHITE))
     }
 
     fn key_button(&self, key: Key, label: Label, style: Style, d: f32, cx: &Cx) -> Div<Self> {
-        let pressed = cx.hovered(("key", key)) && cx.mouse_down || self.flash.is_some_and(|(k, _)| k == key);
+        let hovered = cx.hovered(("key", key));
+        let pressed = hovered && cx.mouse_down || self.flash.is_some_and(|(k, _)| k == key);
         let active = matches!(key, Key::Op(op) if self.engine.active_op() == Some(op))
             || (key == Key::Second && self.engine.second);
         let (bg, pressed_bg) = match style {
@@ -176,6 +180,8 @@ impl CalculatorApp {
             (true, ..) => (rgb(pressed_bg), Color::WHITE),
             (false, true, Style::Operator) => (rgb(0xffffff), rgb(OPERATOR)),
             (false, true, _) => (rgb(SCIENTIFIC_PRESSED), Color::WHITE),
+            // Hovered keys light up a little, so the pointer has a target.
+            _ if hovered => (lighten(rgb(bg)), Color::WHITE),
             _ => (rgb(bg), Color::WHITE),
         };
         let size = match style {
@@ -201,17 +207,49 @@ impl CalculatorApp {
     }
 
     fn mode_button(&self, d: f32, cx: &Cx) -> Div<Self> {
-        let pressed = cx.hovered("mode") && cx.mouse_down || self.menu_open;
+        let hovered = cx.hovered("mode");
+        let bg = match (hovered && cx.mouse_down || self.menu.is_some(), hovered) {
+            (true, _) => rgb(DIGIT_PRESSED),
+            (false, true) => lighten(rgb(DIGIT)),
+            _ => rgb(DIGIT),
+        };
         div()
             .id("mode")
             .size(d)
             .shrink_0()
             .rounded(d / 2.0)
-            .bg(rgb(if pressed { DIGIT_PRESSED } else { DIGIT }))
+            .bg(bg)
             .items_center()
             .justify_center()
-            .on_click(|s: &mut Self, _| s.menu_open = !s.menu_open)
+            .on_click(|s: &mut Self, cx: &mut Cx| s.open_menu(cx))
             .child(canvas(icons::calculator).size(d * 0.5))
+    }
+
+    /// Opens the mode menu just above the calculator key.
+    pub fn open_menu(&mut self, cx: &Cx) {
+        let (w, h) = cx.window_size;
+        let d = self.key_size(cx);
+        let cols = self.mode.columns() as f32;
+        // The keypad is centered; in Scientific the key follows six columns.
+        let left = ((w - cols * d - (cols - 1.0) * GAP) / 2.0).max(PAD);
+        let x = left + if self.mode == Mode::Scientific { 6.0 * (d + GAP) } else { 0.0 };
+        let top = h - PAD - d;
+        let items = [(Mode::Basic, "Basic", "Ctrl+1"), (Mode::Scientific, "Scientific", "Ctrl+2")]
+            .into_iter()
+            .map(|(mode, label, shortcut)| MenuItem::new(label, mode).shortcut(shortcut).checked(self.mode == mode))
+            .collect();
+        // Opens upward, its bottom 6pt above the key (two 24pt rows, 5pt padding).
+        let menu_h = 2.0 * 24.0 + 2.0 * 5.0;
+        self.menu = Some(Menu::new(Point { x, y: (top - 6.0 - menu_h).max(0.0) }, items));
+    }
+
+    /// Key diameter: keys grow with the window but keep their circles.
+    fn key_size(&self, cx: &Cx) -> f32 {
+        let (w, h) = cx.window_size;
+        let cols = self.mode.columns() as f32;
+        let by_width = (w - 2.0 * PAD - (cols - 1.0) * GAP) / cols;
+        let by_height = (h - HEADER_H - 70.0 - PAD - 4.0 * GAP) / 5.0;
+        by_width.min(by_height).max(24.0).floor()
     }
 
     fn basic_rows(&self) -> [[(Key, Label, Style); 4]; 5] {
@@ -291,46 +329,12 @@ impl CalculatorApp {
         }
         pad
     }
+}
 
-    fn mode_menu(&self, d: f32, cx: &Cx) -> Div<Self> {
-        let h = cx.window_size.1;
-        let width = 180.0;
-        let mut panel = div()
-            .absolute(PAD, h - PAD - d - 8.0 - 2.0 * 24.0 - 10.0)
-            .w(width)
-            .flex_col()
-            .p(5.0)
-            .rounded(8.0)
-            .bg(rgb(MENU_BG))
-            .border(rgba(0xffffff, 0.14), 0.5)
-            .shadow(rgba(0x000000, 0.45), 14.0, 6.0)
-            .occlude();
-        for (mode, label, shortcut) in [(Mode::Basic, "Basic", "Ctrl+1"), (Mode::Scientific, "Scientific", "Ctrl+2")] {
-            let hovered = cx.hovered(("mode-item", label));
-            let color = if hovered { Color::WHITE } else { rgba(0xffffff, 0.85) };
-            let check = self.mode == mode;
-            panel = panel.child(
-                div()
-                    .id(("mode-item", label))
-                    .h(24.0)
-                    .px(6.0)
-                    .rounded(5.0)
-                    .flex_row()
-                    .items_center()
-                    .gap(4.0)
-                    .hover_bg(rgb(ACCENT))
-                    .on_click(move |s: &mut Self, cx: &mut Cx| s.set_mode(mode, cx))
-                    .child(div().w(14.0).child_if(check, || text("\u{2713}").color(color).into()))
-                    .child(text(label).color(color).flex_1())
-                    .child(text(shortcut).color(if hovered { color } else { rgba(0xffffff, 0.45) })),
-            );
-        }
-        div()
-            .inset_0()
-            .deferred()
-            .on_mouse_down(|s: &mut Self, _| s.menu_open = false)
-            .child(panel)
-    }
+/// A key's color a little lighter, for hover.
+fn lighten(c: Color) -> Color {
+    let k = 0.1;
+    Color { r: c.r + (1.0 - c.r) * k, g: c.g + (1.0 - c.g) * k, b: c.b + (1.0 - c.b) * k, a: c.a }
 }
 
 fn digits_for(mode: Mode) -> u32 {
@@ -347,13 +351,19 @@ impl App for CalculatorApp {
 
     fn render(&mut self, cx: &mut Cx) -> Div<Self> {
         let (w, h) = cx.window_size;
-        let cols = self.mode.columns() as f32;
-        // Keys grow with the window but keep their circles.
-        let by_width = (w - 2.0 * PAD - (cols - 1.0) * GAP) / cols;
-        let by_height = (h - HEADER_H - 70.0 - PAD - 4.0 * GAP) / 5.0;
-        let d = by_width.min(by_height).max(24.0).floor();
+        let d = self.key_size(cx);
 
-        let mut header = div().h(HEADER_H).shrink_0().flex_row().items_center().px(13.0).window_drag();
+        // The traffic lights sit where a toolbar window has them (20pt in,
+        // centered in a 52pt bar), over the display's empty top.
+        let mut header = div()
+            .absolute(0.0, 0.0)
+            .w(w)
+            .h(native::TOOLBAR_H)
+            .flex_row()
+            .items_center()
+            .pl(native::TRAFFIC_LIGHTS_X)
+            .pr(13.0)
+            .window_drag();
         // The keypad stays dark, so the window buttons do too.
         let dark = cx.dark;
         cx.dark = true;
@@ -372,11 +382,15 @@ impl App for CalculatorApp {
             .h(h)
             .flex_col()
             .bg(rgb(WINDOW_BG))
-            .child(header)
             .child(self.display(cx, display_w))
-            .child(self.keypad(d, cx));
-        if self.menu_open {
-            root = root.child(self.mode_menu(d, cx));
+            .child(self.keypad(d, cx))
+            .child(header);
+        if let Some(menu) = &self.menu {
+            // Dark like the rest of the window, in both appearances.
+            cx.dark = true;
+            let panel = menu.render(cx, |s: &mut Self, mode, cx| s.set_mode(mode, cx), |s: &mut Self, _| s.menu = None);
+            cx.dark = dark;
+            root = root.child(panel);
         }
         if cx.transparent && !cx.maximized && !ui::is_y7ya() {
             root = root.child(div().inset_0().rounded(cx.window_radius).border(rgba(0xffffff, 0.14), 1.0));
@@ -385,6 +399,15 @@ impl App for CalculatorApp {
     }
 
     fn on_key(&mut self, key: &KeyPress, cx: &mut Cx) -> bool {
+        // The open mode menu takes every key (arrows, Return, Escape, letters).
+        if let Some(menu) = &mut self.menu {
+            match menu.key(key, cx) {
+                MenuKey::Pick(mode) => self.set_mode(mode, cx),
+                MenuKey::Close => self.menu = None,
+                MenuKey::Stay => {}
+            }
+            return true;
+        }
         if key.ctrl && !key.alt {
             match &key.key {
                 WinitKey::Character(c) => match c.to_lowercase().as_str() {
@@ -402,13 +425,7 @@ impl App for CalculatorApp {
         let k = match &key.key {
             WinitKey::Named(NamedKey::Enter) => Some(Key::Equals),
             WinitKey::Named(NamedKey::Backspace | NamedKey::Delete) => Some(Key::Backspace),
-            WinitKey::Named(NamedKey::Escape) => {
-                if self.menu_open {
-                    self.menu_open = false;
-                    return true;
-                }
-                Some(Key::Clear)
-            }
+            WinitKey::Named(NamedKey::Escape) => Some(Key::Clear),
             _ if key.alt && key.is_char('-') => Some(Key::Negate),
             _ => key.text.as_deref().and_then(|t| t.chars().next()).and_then(key_for_char),
         };

@@ -158,6 +158,8 @@ impl XdgShellHandler for Desk {
         let mapped = self.space.elements().find(|w| gone(w)).cloned();
         if let Some(w) = mapped {
             self.space.unmap_elem(&w);
+            let (r, d) = crate::state::CLOSE_SPRING;
+            self.closing.push(crate::state::Closing { window: w, anim: crate::anim::Anim::spring(0.0, 1.0, r, d) });
         }
         self.minimized.retain(|w| !gone(w));
         self.unmapped.retain(|w| !gone(w));

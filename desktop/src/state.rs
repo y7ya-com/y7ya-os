@@ -34,15 +34,22 @@ use crate::grabs::Edges;
 pub struct Minimizing {
     pub window: Window,
     pub loc: Point<i32, Logical>,
-    pub from: Rectangle<f64, Logical>,
     pub to: Rectangle<f64, Logical>,
     pub anim: Anim,
 }
 
+/// A window the app closed, fading out from its last frame.
+pub struct Closing {
+    pub window: Window,
+    pub anim: Anim,
+}
+
 /// Spring settings (response in seconds, damping ratio) for window motion.
-pub const OPEN_SPRING: (f64, f64) = (0.36, 0.8);
-pub const MINIMIZE_SPRING: (f64, f64) = (0.42, 1.0);
-pub const ZOOM_SPRING: (f64, f64) = (0.38, 0.92);
+/// All critically damped: macOS moves windows decisively, never bouncing.
+pub const OPEN_SPRING: (f64, f64) = (0.32, 1.0);
+pub const CLOSE_SPRING: (f64, f64) = (0.26, 1.0);
+pub const MINIMIZE_SPRING: (f64, f64) = (0.36, 1.0);
+pub const ZOOM_SPRING: (f64, f64) = (0.34, 1.0);
 /// Margin around and between tiled windows (macOS keeps a little air).
 pub const TILE_GAP: i32 = 8;
 
@@ -77,7 +84,7 @@ pub struct WinData {
     /// The opening animation (0 → 1), while it runs.
     pub open: Option<Anim>,
     /// The window is shown morphing from one frame to another (zoom, coming
-    /// back from the taskbar), with whether it also fades in.
+    /// back from the taskbar), with whether it comes from the taskbar.
     pub morph: Option<(Rectangle<f64, Logical>, Rectangle<f64, Logical>, Anim, bool)>,
     /// Where its taskbar button is, so minimizing can fly into it.
     pub taskbar_rect: Option<Rectangle<i32, Logical>>,
@@ -99,6 +106,7 @@ pub struct Desk {
     pub popups: PopupManager,
     pub minimized: Vec<Window>,
     pub minimizing: Vec<Minimizing>,
+    pub closing: Vec<Closing>,
     /// Where a window being dragged would tile if dropped now.
     pub snap_preview: Option<Rectangle<i32, Logical>>,
     /// New windows wait here until their first frame arrives.
@@ -199,6 +207,7 @@ impl Desk {
             popups: PopupManager::default(),
             minimized: Vec::new(),
             minimizing: Vec::new(),
+            closing: Vec::new(),
             snap_preview: None,
             unmapped: Vec::new(),
             compositor_state,
@@ -401,10 +410,9 @@ impl Desk {
         let loc = self.space.element_location(window);
         win_data(window).borrow_mut().parked_at = loc;
         if let Some(loc) = loc {
-            let from = frame_of(window, loc).to_f64();
             let to = self.taskbar_target(window);
             let (r, d) = MINIMIZE_SPRING;
-            self.minimizing.push(Minimizing { window: window.clone(), loc, from, to, anim: Anim::spring(0.0, 1.0, r, d) });
+            self.minimizing.push(Minimizing { window: window.clone(), loc, to, anim: Anim::spring(0.0, 1.0, r, d) });
         }
         self.space.unmap_elem(window);
         self.minimized.push(window.clone());

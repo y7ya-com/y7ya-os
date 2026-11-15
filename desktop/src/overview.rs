@@ -14,8 +14,8 @@ use crate::state::{Desk, frame_of};
 /// Height of the strip of spaces at the top of Mission Control.
 pub const SPACES_BAR_H: f64 = 124.0;
 /// Spring settings (response in seconds, damping ratio).
-const MC_SPRING: (f64, f64) = (0.42, 0.92);
-const SLIDE_SPRING: (f64, f64) = (0.48, 0.94);
+const MC_SPRING: (f64, f64) = (0.38, 1.0);
+const SLIDE_SPRING: (f64, f64) = (0.42, 1.0);
 /// How far a three-finger swipe travels for a full transition.
 const SWIPE_FULL: f64 = 320.0;
 

@@ -8,12 +8,15 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::Duration;
 
 use cosmic_text::{Attrs, Buffer as TextBuffer, Color as TextColor, Family, FontSystem, Metrics, Shaping, SwashCache, Weight};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement};
-use smithay::backend::renderer::element::surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree};
+use smithay::backend::renderer::element::surface::{
+    WaylandSurfaceRenderElement, WaylandSurfaceTexture, render_elements_from_surface_tree,
+};
 use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement, RescaleRenderElement};
 use smithay::backend::renderer::element::{AsRenderElements, Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::element::PixelShaderElement;
@@ -40,7 +43,7 @@ pub type Moved<E> = RelocateRenderElement<RescaleRenderElement<E>>;
 smithay::backend::renderer::element::render_elements! {
     pub DeskElement<=GlesRenderer>;
     Surface=Moved<WaylandSurfaceRenderElement<GlesRenderer>>,
-    Rounded=Moved<RoundedSurface>,
+    Window=Moved<WindowSurface>,
     Shader=PixelShaderElement,
     Text=Moved<MemoryRenderBufferRenderElement<GlesRenderer>>,
 }
@@ -144,6 +147,17 @@ struct WinLook {
     shadow: Option<ShaderSlot>,
     titlebar: Option<ShaderSlot>,
     title: Option<(String, bool, bool, i32, MemoryRenderBuffer, (i32, i32))>,
+    last: Option<LastFrame>,
+}
+
+/// What a window showed when last drawn, kept so it can be drawn fading out
+/// after the app has closed it.
+struct LastFrame {
+    ssd: bool,
+    geo: Rectangle<i32, Logical>,
+    title: String,
+    loc: Point<i32, Logical>,
+    surfaces: Vec<Rc<WaylandSurfaceRenderElement<GlesRenderer>>>,
 }
 
 /// A scale about `pivot` followed by a move, applied to a whole window.
@@ -189,6 +203,37 @@ impl Xf {
         let scale = Scale::from((self.scale, self.scale_y));
         RelocateRenderElement::from_element(RescaleRenderElement::from_element(e, pivot, scale), offset, Relocate::Relative)
     }
+}
+
+/// A window flying into its taskbar button (`t` = 1) or out of it (`t` = 0):
+/// it shrinks evenly towards the button, keeping its shape, and is gone by
+/// the time it gets there.
+fn into_taskbar(frame: Rectangle<f64, Logical>, button: Rectangle<f64, Logical>, t: f64) -> (Xf, f32) {
+    let t = t.clamp(0.0, 1.0);
+    let center = frame.loc + frame.size.to_point().downscale(2.0);
+    let target = button.loc + button.size.to_point().downscale(2.0);
+    let end = (button.size.w * 2.0 / frame.size.w).min(button.size.h * 3.0 / frame.size.h).clamp(0.1, 1.0);
+    let xf = Xf::uniform(center, lerp(1.0, end, t), (target - center).upscale(t));
+    // Fully visible for the first part of the trip, then fading out.
+    let fade = ((t - 0.25) / 0.7).clamp(0.0, 1.0);
+    (xf, (1.0 - fade * fade * (3.0 - 2.0 * fade)) as f32)
+}
+
+/// Cubic ease-out for fades that run on a clock rather than a spring.
+fn ease_out(t: f64) -> f64 {
+    1.0 - (1.0 - t).powi(3)
+}
+
+/// Where a window was when it was last drawn.
+pub fn last_frame(window: &Window) -> Option<Rectangle<i32, Logical>> {
+    let look = win_look(window).borrow();
+    let last = look.last.as_ref()?;
+    let (loc, size) = (last.loc, last.geo.size);
+    Some(if last.ssd {
+        Rectangle::new((loc.x, loc.y - TITLEBAR_H).into(), (size.w, size.h + TITLEBAR_H).into())
+    } else {
+        Rectangle::new(loc, size)
+    })
 }
 
 fn lerp_rect(a: Rectangle<f64, Logical>, b: Rectangle<f64, Logical>, t: f64) -> Rectangle<f64, Logical> {
@@ -388,18 +433,26 @@ pub fn elements(desk: &mut Desk, look: &mut Look, renderer: &mut GlesRenderer) -
 
     let focused = desk.focused_window();
     // Windows shrinking into the taskbar draw on top of everything else.
-    let minimizing: Vec<(Window, Point<i32, Logical>, Rectangle<f64, Logical>, Rectangle<f64, Logical>, f64)> = desk
-        .minimizing
-        .iter()
-        .map(|m| (m.window.clone(), m.loc, m.from, m.to, m.anim.value()))
-        .collect();
+    let minimizing: Vec<(Window, Point<i32, Logical>, Rectangle<f64, Logical>, f64)> =
+        desk.minimizing.iter().map(|m| (m.window.clone(), m.loc, m.to, m.anim.value())).collect();
     desk.minimizing.retain(|m| !m.anim.done());
-    for (window, loc, from, to, t) in minimizing.iter().rev() {
+    for (window, loc, to, t) in minimizing.iter().rev() {
         desk.needs_redraw = true;
         let frame = frame_of(window, *loc).to_f64();
-        let xf = Xf::stretch(frame, lerp_rect(*from, *to, t.clamp(0.0, 1.0)));
-        let alpha = (1.0 - t * 0.85).clamp(0.0, 1.0) as f32;
+        let (xf, alpha) = into_taskbar(frame, *to, *t);
         draw_window(desk, &mut cx, window, *loc, xf, alpha, false, &mut out);
+    }
+
+    // Closed windows shrink a little as they fade away.
+    let closing: Vec<(Window, f64)> = desk.closing.iter().map(|c| (c.window.clone(), c.anim.value())).collect();
+    desk.closing.retain(|c| !c.anim.done());
+    for (window, t) in closing.iter().rev() {
+        desk.needs_redraw = true;
+        let Some(frame) = last_frame(window) else { continue };
+        let center = frame.loc.to_f64() + frame.size.to_f64().to_point().downscale(2.0);
+        let xf = Xf::uniform(center, 1.0 - 0.06 * t, Point::from((0.0, 0.0)));
+        let alpha = (1.0 - t).clamp(0.0, 1.0) as f32;
+        draw_window(desk, &mut cx, window, frame.loc, xf, alpha, false, &mut out);
     }
 
     let windows = desk.visible_windows();
@@ -424,22 +477,22 @@ pub fn elements(desk: &mut Desk, look: &mut Look, renderer: &mut GlesRenderer) -
         if open.is_some() || morph.is_some() {
             desk.needs_redraw = true;
         }
-        // Opening: grows from 88% with a soft spring while fading in.
+        // Opening: grows out of 94% while fading in, without overshooting.
         let grow = open.map_or(1.0, |a| a.value());
-        let mut alpha = open.map_or(1.0, |a| (a.start_elapsed() / 0.14).min(1.0)) as f32;
+        let mut alpha = open.map_or(1.0, |a| ease_out((a.start_elapsed() / 0.16).min(1.0))) as f32;
         let mut xf = Xf::uniform(
             frame.loc + frame.size.to_point().downscale(2.0),
-            0.88 + 0.12 * grow,
+            0.94 + 0.06 * grow,
             Point::from((*slide, 0.0)),
         );
-        // Zooming or coming back from the taskbar: morph from the old shape.
-        if let Some((from, to, t, fade)) = morph {
-            let mut xf_m = Xf::stretch(frame, lerp_rect(from, to, t));
-            xf_m.offset.x += *slide;
-            xf = xf_m;
-            if fade {
-                alpha = (0.15 + 0.85 * t).clamp(0.0, 1.0) as f32;
+        // Zooming, tiling, or coming back from the taskbar.
+        if let Some((from, to, t, from_taskbar)) = morph {
+            if from_taskbar {
+                (xf, alpha) = into_taskbar(frame, from, 1.0 - t);
+            } else {
+                xf = Xf::stretch(frame, lerp_rect(from, to, t));
             }
+            xf.offset.x += *slide;
         }
         if let Some((_, target)) = layout.iter().find(|(w, _)| w == window) {
             let to = Rectangle::new(
@@ -496,28 +549,43 @@ fn push_snap_preview(cx: &mut Ctx, rect: Option<Rectangle<i32, Logical>>, out: &
 fn draw_window(desk: &Desk, cx: &mut Ctx, window: &Window, loc: Point<i32, Logical>, xf: Xf, alpha: f32, active: bool, out: &mut Vec<DeskElement>) {
     let scale = cx.scale;
     let dark = cx.dark;
-    let ssd = is_ssd(window);
-    let geo = window.geometry();
-    let frame = frame_of(window, loc);
     let s = xf.scale as f32;
-
-    // Popups (menus) sit above the window and aren't clipped.
-    let toplevel = window.toplevel().unwrap();
-    let surface = toplevel.wl_surface();
-    let surface_loc = loc - geo.loc;
-    for (popup, offset) in PopupManager::popups_for_surface(surface) {
-        let at = (surface_loc + geo.loc + offset - popup.geometry().loc).to_physical_precise_round(scale);
-        let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-            render_elements_from_surface_tree(cx.renderer, popup.wl_surface(), at, scale, alpha, Kind::Unspecified);
-        out.extend(elems.into_iter().map(|e| DeskElement::Surface(xf.wrap(e, scale))));
-    }
-
     let mut wl = win_look(window).borrow_mut();
+
+    // A window the app has closed keeps showing its last frame while it fades.
+    let alive = window.toplevel().is_some_and(|t| t.alive());
+    if alive {
+        let toplevel = window.toplevel().unwrap();
+        let surface = toplevel.wl_surface();
+        let geo = window.geometry();
+        let surface_loc = loc - geo.loc;
+
+        // Popups (menus) sit above the window and aren't clipped.
+        for (popup, offset) in PopupManager::popups_for_surface(surface) {
+            let at = (surface_loc + geo.loc + offset - popup.geometry().loc).to_physical_precise_round(scale);
+            let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                render_elements_from_surface_tree(cx.renderer, popup.wl_surface(), at, scale, alpha, Kind::Unspecified);
+            out.extend(elems.into_iter().map(|e| DeskElement::Surface(xf.wrap(e, scale))));
+        }
+
+        let surf_at = surface_loc.to_physical_precise_round(scale);
+        let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+            render_elements_from_surface_tree(cx.renderer, surface, surf_at, scale, 1.0, Kind::Unspecified);
+        let (_, title) = app_id_and_title(window);
+        wl.last = Some(LastFrame { ssd: is_ssd(window), geo, title, loc, surfaces: surfaces.into_iter().map(Rc::new).collect() });
+    }
+    let Some(last) = wl.last.as_ref() else { return };
+    let (ssd, geo, loc) = (last.ssd, last.geo, last.loc);
+    let title = if last.title.is_empty() { "Untitled".to_string() } else { last.title.clone() };
+    let surfaces = last.surfaces.clone();
+    let frame = if ssd {
+        Rectangle::new((loc.x, loc.y - TITLEBAR_H).into(), (geo.size.w, geo.size.h + TITLEBAR_H).into())
+    } else {
+        Rectangle::new(loc, geo.size)
+    };
 
     if ssd {
         // Title text.
-        let (_, title) = app_id_and_title(window);
-        let title = if title.is_empty() { "Untitled".to_string() } else { title };
         let ink = match (dark, active) {
             (true, true) => [1.0, 1.0, 1.0, 0.85],
             (true, false) => [1.0, 1.0, 1.0, 0.38],
@@ -587,17 +655,11 @@ fn draw_window(desk: &Desk, cx: &mut Ctx, window: &Window, loc: Point<i32, Logic
     let own_shadow = geo.loc != Point::from((0, 0));
     let r = (RADIUS as f64 * scale) as f32;
     let radii = if ssd { [0.0, 0.0, r, r] } else { [r, r, r, r] };
-    let surf_at = surface_loc.to_physical_precise_round(scale);
     let geo_phys: Rectangle<i32, Physical> = Rectangle::new(loc, geo.size).to_physical_precise_round(scale);
-    let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-        render_elements_from_surface_tree(cx.renderer, surface, surf_at, scale, alpha, Kind::Unspecified);
-    for elem in elems {
-        if own_shadow {
-            out.push(DeskElement::Surface(xf.wrap(elem, scale)));
-        } else {
-            let rounded = RoundedSurface::new(elem, cx.look.shaders.rounded.clone(), scale, geo_phys, radii);
-            out.push(DeskElement::Rounded(xf.wrap(rounded, scale)));
-        }
+    for elem in surfaces {
+        let program = (!own_shadow).then(|| cx.look.shaders.rounded.clone());
+        let surface = WindowSurface::new(elem, program, scale, geo_phys, radii, alpha);
+        out.push(DeskElement::Window(xf.wrap(surface, scale)));
     }
 
     // Shadow.
@@ -759,21 +821,25 @@ fn layer_elements(desk: &Desk, renderer: &mut GlesRenderer, layers: &[Layer], sc
     }
 }
 
-/// A window surface drawn through the corner-rounding shader.
+/// A window's surface: drawn through the corner-rounding shader (unless the
+/// app rounds and shadows itself) at an opacity of our choosing, so a closed
+/// window's last frame can still fade out.
 #[derive(Debug)]
-pub struct RoundedSurface {
-    inner: WaylandSurfaceRenderElement<GlesRenderer>,
-    program: GlesTexProgram,
+pub struct WindowSurface {
+    inner: Rc<WaylandSurfaceRenderElement<GlesRenderer>>,
+    program: Option<GlesTexProgram>,
     uniforms: Vec<Uniform<'static>>,
+    alpha: f32,
 }
 
-impl RoundedSurface {
+impl WindowSurface {
     fn new(
-        inner: WaylandSurfaceRenderElement<GlesRenderer>,
-        program: GlesTexProgram,
+        inner: Rc<WaylandSurfaceRenderElement<GlesRenderer>>,
+        program: Option<GlesTexProgram>,
         scale: f64,
         window_geo: Rectangle<i32, Physical>,
         radii: [f32; 4],
+        alpha: f32,
     ) -> Self {
         let elem = inner.geometry(Scale::from(scale));
         let rel = window_geo.loc - elem.loc;
@@ -783,11 +849,11 @@ impl RoundedSurface {
             Uniform::new("radii", (radii[0], radii[1], radii[2], radii[3])),
             Uniform::new("flip", 0.0f32),
         ];
-        RoundedSurface { inner, program, uniforms }
+        WindowSurface { inner, program, uniforms, alpha }
     }
 }
 
-impl Element for RoundedSurface {
+impl Element for WindowSurface {
     fn id(&self) -> &Id {
         self.inner.id()
     }
@@ -806,19 +872,19 @@ impl Element for RoundedSurface {
     fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
         self.inner.damage_since(scale, commit)
     }
-    fn opaque_regions(&self, _scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
-        // The rounded corners are see-through.
-        OpaqueRegions::default()
+    fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        // Rounded corners and fading windows are see-through.
+        if self.program.is_some() || self.alpha < 1.0 { OpaqueRegions::default() } else { self.inner.opaque_regions(scale) }
     }
     fn alpha(&self) -> f32 {
-        self.inner.alpha()
+        self.alpha
     }
     fn kind(&self) -> Kind {
         self.inner.kind()
     }
 }
 
-impl RenderElement<GlesRenderer> for RoundedSurface {
+impl RenderElement<GlesRenderer> for WindowSurface {
     fn draw(
         &self,
         frame: &mut GlesFrame<'_, '_>,
@@ -827,10 +893,22 @@ impl RenderElement<GlesRenderer> for RoundedSurface {
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
-        frame.override_default_tex_program(self.program.clone(), self.uniforms.clone());
-        let result = self.inner.draw(frame, src, dst, damage, opaque_regions);
-        frame.clear_tex_program_override();
-        result
+        let texture = match self.inner.texture() {
+            WaylandSurfaceTexture::Texture(texture) => texture,
+            WaylandSurfaceTexture::SolidColor(color) => return frame.draw_solid(dst, damage, *color * self.alpha),
+        };
+        let uniforms = if self.program.is_some() { &self.uniforms[..] } else { &[] };
+        frame.render_texture_from_to(
+            texture,
+            src,
+            dst,
+            damage,
+            opaque_regions,
+            self.inner.transform(),
+            self.alpha,
+            self.program.as_ref(),
+            uniforms,
+        )
     }
 
     fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {

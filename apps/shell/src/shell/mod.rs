@@ -126,6 +126,9 @@ pub struct Shell {
     drawn: Panel,
     /// When the current open or close animation started, and which it is.
     anim: Option<(Instant, bool)>,
+    /// An opening animation waits for the panel's first frame: a new surface
+    /// takes a moment to set up, and the start of the motion would be lost.
+    anim_waiting: bool,
     query: Rc<RefCell<TextInput>>,
     results: Vec<Section>,
     selected: usize,
@@ -198,6 +201,7 @@ impl Shell {
             panel: Panel::None,
             drawn: Panel::None,
             anim: None,
+            anim_waiting: false,
             query: Rc::new(RefCell::new(query)),
             results: Vec::new(),
             selected: 0,
@@ -346,6 +350,7 @@ impl Shell {
         self.panel = panel;
         self.drawn = panel;
         self.anim = Some((Instant::now(), false));
+        self.anim_waiting = true;
         self.dragging = None;
         self.start_menu = None;
         cx.blur();
@@ -379,7 +384,9 @@ impl Shell {
             return;
         }
         self.panel = Panel::None;
-        self.anim = Some((Instant::now(), true));
+        // Closing halfway through opening fades out from where it got to.
+        let skip = CLOSE.mul_f32(1.0 - self.reveal().cbrt());
+        self.anim = Some((Instant::now().checked_sub(skip).unwrap_or_else(Instant::now), true));
         self.dragging = None;
         self.start_menu = None;
         cx.blur();
@@ -390,6 +397,7 @@ impl Shell {
     pub fn open_now(&mut self, panel: Panel, cx: &mut Cx) {
         self.open(panel, cx);
         self.anim = None;
+        self.anim_waiting = false;
     }
 
     /// How far the drawn panel is in: 0 hidden, 1 fully shown (ease-out).
@@ -533,7 +541,14 @@ impl App for Shell {
         let t = Self::theme(cx);
         match cx.layer() {
             BAR => self.taskbar(cx, &t),
-            PANEL => self.panel_view(cx, &t),
+            PANEL => {
+                if std::mem::take(&mut self.anim_waiting) {
+                    if let Some((start, false)) = &mut self.anim {
+                        *start = Instant::now();
+                    }
+                }
+                self.panel_view(cx, &t)
+            }
             BANNERS => self.banners(cx, &t),
             _ => div(),
         }

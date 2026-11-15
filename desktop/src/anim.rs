@@ -2,7 +2,14 @@
 //! target, so motion keeps its speed when retargeted mid-flight and swipes
 //! hand their finger velocity over.
 
+use std::sync::OnceLock;
 use std::time::Instant;
+
+/// `Y7_SLOW=10` plays every animation ten times slower, to inspect them.
+fn slow_motion() -> f64 {
+    static SLOW: OnceLock<f64> = OnceLock::new();
+    *SLOW.get_or_init(|| std::env::var("Y7_SLOW").ok().and_then(|s| s.parse().ok()).filter(|s| *s > 0.0).unwrap_or(1.0))
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct Anim {
@@ -43,7 +50,7 @@ impl Anim {
     }
 
     fn t(&self) -> f64 {
-        self.start.elapsed().as_secs_f64()
+        self.start.elapsed().as_secs_f64() / slow_motion()
     }
 
     pub fn value(&self) -> f64 {

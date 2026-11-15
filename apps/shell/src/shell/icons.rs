@@ -289,3 +289,112 @@ pub fn chevron(scene: &mut Scene, b: Bounds, color: Color, right: bool) {
     scene.segment(pt(c.x - 2.0 * d, c.y - 4.5), pt(c.x + 2.5 * d, c.y), 1.6, color);
     scene.segment(pt(c.x + 2.5 * d, c.y), pt(c.x - 2.0 * d, c.y + 4.5), 1.6, color);
 }
+
+/// A chevron `size` points tall (`chevron` is the 9pt one).
+pub fn chevron_sized(scene: &mut Scene, b: Bounds, color: Color, right: bool, size: f32, stroke: f32) {
+    let c = b.center();
+    let (h, w) = (size / 2.0, size * 0.27);
+    let d = if right { 1.0 } else { -1.0 };
+    scene.segment(pt(c.x - w * d, c.y - h), pt(c.x + w * d, c.y), stroke, color);
+    scene.segment(pt(c.x + w * d, c.y), pt(c.x - w * d, c.y + h), stroke, color);
+}
+
+/// A checkmark, for the chosen row of a list.
+pub fn check(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    scene.segment(pt(c.x - 5.0, c.y + 0.2), pt(c.x - 1.6, c.y + 3.8), 1.8, color);
+    scene.segment(pt(c.x - 1.6, c.y + 3.8), pt(c.x + 5.2, c.y - 4.2), 1.8, color);
+}
+
+/// A small padlock outline, for secured networks.
+pub fn padlock(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    let body = Bounds::new(c.x - 4.5, c.y - 1.0, 9.0, 7.0);
+    scene.rect(body, color, 1.8);
+    arc(scene, c.x, c.y - 3.0, 2.7, 180.0, 360.0, color, 1.4);
+    for x in [c.x - 2.7, c.x + 2.7] {
+        scene.segment(pt(x, c.y - 3.0), pt(x, c.y - 0.5), 1.4, color);
+    }
+}
+
+pub fn headphones(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    arc(scene, c.x, c.y + 1.0, 6.5, 180.0, 360.0, color, 1.6);
+    for x in [c.x - 6.5, c.x + 6.5] {
+        scene.segment(pt(x, c.y + 1.0), pt(x, c.y + 3.0), 1.6, color);
+    }
+    for x in [c.x - 7.6, c.x + 4.6] {
+        scene.rect(Bounds::new(x, c.y + 0.5, 3.0, 6.5), color, 1.4);
+    }
+}
+
+pub fn mouse(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    let body = Bounds::new(c.x - 4.8, c.y - 7.5, 9.6, 15.0);
+    scene.rect_bordered(body, Color::TRANSPARENT, 4.8, color, 1.5);
+    scene.segment(pt(c.x, c.y - 5.0), pt(c.x, c.y - 2.2), 1.5, color);
+}
+
+pub fn keyboard(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    let body = Bounds::new(c.x - 8.5, c.y - 5.0, 17.0, 10.0);
+    scene.rect_bordered(body, Color::TRANSPARENT, 2.0, color, 1.4);
+    for row in 0..2 {
+        for col in 0..5 {
+            let k = Bounds::new(body.x + 2.6 + col as f32 * 2.6, body.y + 2.4 + row as f32 * 2.4, 1.3, 1.3);
+            scene.rect(k, color, 0.4);
+        }
+    }
+    scene.segment(pt(c.x - 3.5, c.y + 2.6), pt(c.x + 3.5, c.y + 2.6), 1.2, color);
+}
+
+pub fn phone(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    let body = Bounds::new(c.x - 4.5, c.y - 8.0, 9.0, 16.0);
+    scene.rect_bordered(body, Color::TRANSPARENT, 2.2, color, 1.4);
+    scene.segment(pt(c.x - 1.4, c.y + 5.6), pt(c.x + 1.4, c.y + 5.6), 1.2, color);
+}
+
+pub fn computer(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    let screen = Bounds::new(c.x - 7.0, c.y - 6.0, 14.0, 9.5);
+    scene.rect_bordered(screen, Color::TRANSPARENT, 1.6, color, 1.4);
+    scene.segment(pt(c.x - 9.0, c.y + 5.5), pt(c.x + 9.0, c.y + 5.5), 1.6, color);
+}
+
+pub fn gamepad(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    let body = Bounds::new(c.x - 8.5, c.y - 4.5, 17.0, 9.5);
+    scene.rect_bordered(body, Color::TRANSPARENT, 4.7, color, 1.4);
+    scene.segment(pt(c.x - 5.5, c.y), pt(c.x - 2.5, c.y), 1.3, color);
+    scene.segment(pt(c.x - 4.0, c.y - 1.5), pt(c.x - 4.0, c.y + 1.5), 1.3, color);
+    scene.rect(Bounds::new(c.x + 2.6, c.y - 1.8, 1.8, 1.8), color, 0.9);
+    scene.rect(Bounds::new(c.x + 4.4, c.y + 0.2, 1.8, 1.8), color, 0.9);
+}
+
+/// A loudspeaker box, for sound outputs.
+pub fn speaker_box(scene: &mut Scene, b: Bounds, color: Color) {
+    let c = b.center();
+    let body = Bounds::new(c.x - 5.5, c.y - 8.0, 11.0, 16.0);
+    scene.rect_bordered(body, Color::TRANSPARENT, 2.2, color, 1.4);
+    scene.rect_bordered(Bounds::new(c.x - 3.2, c.y - 0.6, 6.4, 6.4), Color::TRANSPARENT, 3.2, color, 1.3);
+    scene.rect(Bounds::new(c.x - 1.0, c.y - 5.6, 2.0, 2.0), color, 1.0);
+}
+
+/// Wi-Fi signal for a list row: the fan with `strength` of it lit.
+pub fn signal(scene: &mut Scene, b: Bounds, color: Color, dim: Color, strength: u8) {
+    wifi(scene, Bounds::new(b.x, b.y - 1.0, b.w, b.h), color, dim, strength, true);
+}
+
+/// A file icon: a page with a folded corner, tinted for its kind.
+pub fn page(scene: &mut Scene, b: Bounds, paper: Color, edge: Color, tint: Color) {
+    let c = b.center();
+    let (w, h) = (b.w * 0.66, b.h * 0.86);
+    let body = Bounds::new(c.x - w / 2.0, c.y - h / 2.0, w, h);
+    scene.rect_bordered(body, paper, w * 0.1, edge, 0.75);
+    // The folded corner.
+    let f = w * 0.3;
+    scene.rect(Bounds::new(body.right() - f, body.y, f, f), tint.alpha(0.22), w * 0.08);
+    // The kind's band near the bottom.
+    scene.rect(Bounds::new(body.x + w * 0.16, body.bottom() - h * 0.34, w * 0.68, h * 0.2), tint, h * 0.05);
+}

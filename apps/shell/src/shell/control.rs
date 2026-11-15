@@ -1,23 +1,43 @@
 //! Quick Settings: Control Center's toggles, sliders and Now Playing as a
-//! flyout above the taskbar's tray.
+//! flyout above the taskbar's tray. Wi-Fi, Bluetooth and Sound expand into
+//! their own views (see `control_detail.rs`): click the module, not its
+//! toggle.
 
 use ui::*;
 
 use super::theme::Theme;
-use super::{Shell, Slider, icons};
+use super::{Module, Shell, Slider, icons};
 use crate::system::{MediaAction, Request};
 
-const WIDTH: f32 = 360.0;
-const PAD: f32 = 12.0;
+pub(super) const WIDTH: f32 = 360.0;
+pub(super) const PAD: f32 = 12.0;
 const HALF: f32 = (WIDTH - 3.0 * PAD) / 2.0;
 
-type Glyph = Box<dyn Fn(&mut Scene, Bounds, Color)>;
+pub(super) type Glyph = Box<dyn Fn(&mut Scene, Bounds, Color)>;
 
 impl Shell {
     pub(super) fn quick_settings(&mut self, cx: &mut Cx, t: &Theme) -> Div<Self> {
+        let content = match self.module {
+            Module::Main => self.control_main(cx, t),
+            m => self.module_view(m, cx, t),
+        };
+        div()
+            .w(WIDTH)
+            .flex_col()
+            .p(PAD)
+            .rounded(16.0)
+            .bg(t.panel)
+            .border(t.border, 0.5)
+            .shadow(t.shadow, 30.0, 10.0)
+            .clip()
+            .occlude()
+            .child(self.swapping(content, WIDTH - 2.0 * PAD))
+    }
+
+    /// The toggles, sliders and Now Playing.
+    fn control_main(&mut self, cx: &mut Cx, t: &Theme) -> Div<Self> {
         let st = self.status.clone();
         let dnd = self.store.lock().unwrap().dnd;
-        let tile = |toggle: Div<Self>| div().w(HALF).h(56.0).px(12.0).rounded(12.0).bg(t.module).justify_center().flex_col().child(toggle);
 
         let wifi_on = st.wifi.enabled;
         let wifi_detail = match (&st.wifi.ssid, st.wifi.available, wifi_on) {
@@ -34,13 +54,10 @@ impl Shell {
             wifi_on,
             st.wifi.available,
             Box::new(|s, b, c| icons::wifi(s, b, c, c.alpha(0.35), 100, true)),
+            Some(Module::Wifi),
+            cx,
             t,
-            |s: &mut Self, _: &mut Cx| {
-                let on = !s.status.wifi.enabled;
-                s.status.wifi.enabled = on;
-                s.services.optimistic(|st| st.wifi.enabled = on);
-                s.send(Request::SetWifi(on));
-            },
+            |s: &mut Self, _: &mut Cx| s.toggle_wifi(),
         );
         let bluetooth = self.toggle(
             "cc-bluetooth",
@@ -53,41 +70,54 @@ impl Shell {
             bt == Some(true),
             bt.is_some(),
             Box::new(icons::bluetooth),
+            Some(Module::Bluetooth),
+            cx,
             t,
-            |s: &mut Self, _: &mut Cx| {
-                let on = s.status.bluetooth != Some(true);
-                s.status.bluetooth = Some(on);
-                s.services.optimistic(|st| st.bluetooth = Some(on));
-                s.send(Request::SetBluetooth(on));
+            |s: &mut Self, _: &mut Cx| s.toggle_bluetooth(),
+        );
+        let focus = self.toggle(
+            "cc-focus",
+            "Focus",
+            if dnd { "Do Not Disturb" } else { "Off" }.into(),
+            dnd,
+            true,
+            Box::new(icons::moon),
+            None,
+            cx,
+            t,
+            |s, _| {
+                let on = !s.store.lock().unwrap().dnd;
+                s.set_dnd(on);
             },
         );
-        let focus = self.toggle("cc-focus", "Focus", if dnd { "Do Not Disturb" } else { "Off" }.into(), dnd, true, Box::new(icons::moon), t, |s, _| {
-            let on = !s.store.lock().unwrap().dnd;
-            s.set_dnd(on);
-        });
-        let dark = self.toggle("cc-dark", "Dark Mode", if cx.dark { "On" } else { "Off" }.into(), cx.dark, true, Box::new(icons::appearance), t, |s, cx| {
-            cx.dark = !cx.dark;
-            s.send(Request::SetDark(cx.dark));
-        });
+        let dark = self.toggle(
+            "cc-dark",
+            "Dark Mode",
+            if cx.dark { "On" } else { "Off" }.into(),
+            cx.dark,
+            true,
+            Box::new(icons::appearance),
+            None,
+            cx,
+            t,
+            |s, cx| {
+                cx.dark = !cx.dark;
+                s.send(Request::SetDark(cx.dark));
+            },
+        );
 
         let mut col = div()
-            .w(WIDTH)
             .flex_col()
             .gap(PAD)
-            .p(PAD)
-            .rounded(14.0)
-            .bg(t.panel)
-            .border(t.border, 0.5)
-            .shadow(t.shadow, 30.0, 10.0)
-            .occlude()
-            .child(div().flex_row().gap(PAD).child(tile(wifi)).child(tile(bluetooth)))
-            .child(div().flex_row().gap(PAD).child(tile(focus)).child(tile(dark)));
+            .child(div().flex_row().gap(PAD).child(wifi).child(bluetooth))
+            .child(div().flex_row().gap(PAD).child(focus).child(dark));
 
         if let Some(level) = st.brightness {
-            col = col.child(self.slider_module("Display", Slider::Brightness, level, false, t));
+            col = col.child(self.slider_module("Display", Slider::Brightness, level, false, None, cx, t));
         }
         if let Some(v) = st.volume {
-            col = col.child(self.slider_module("Sound", Slider::Volume, if v.muted { 0.0 } else { v.level }, v.muted, t));
+            let level = if v.muted { 0.0 } else { v.level };
+            col = col.child(self.slider_module("Sound", Slider::Volume, level, v.muted, Some(Module::Sound), cx, t));
         }
         col = col.child(self.now_playing(t));
         if let Some(bat) = st.battery {
@@ -107,6 +137,25 @@ impl Shell {
         col
     }
 
+    pub(super) fn toggle_wifi(&mut self) {
+        let on = !self.status.wifi.enabled;
+        self.status.wifi.enabled = on;
+        self.services.optimistic(|st| st.wifi.enabled = on);
+        self.send(Request::SetWifi(on));
+        if on && self.module == Module::Wifi {
+            self.send(Request::ScanWifi);
+        }
+    }
+
+    pub(super) fn toggle_bluetooth(&mut self) {
+        let on = self.status.bluetooth != Some(true);
+        self.status.bluetooth = Some(on);
+        self.services.optimistic(|st| st.bluetooth = Some(on));
+        self.send(Request::SetBluetooth(on));
+    }
+
+    /// A toggle tile: the circle switches it; with `expand`, the rest of the
+    /// tile opens its module.
     #[allow(clippy::too_many_arguments)]
     fn toggle(
         &self,
@@ -116,6 +165,8 @@ impl Shell {
         on: bool,
         enabled: bool,
         glyph: Glyph,
+        expand: Option<Module>,
+        cx: &Cx,
         t: &Theme,
         f: impl Fn(&mut Self, &mut Cx) + 'static,
     ) -> Div<Self> {
@@ -132,7 +183,23 @@ impl Shell {
         if enabled {
             circle = circle.on_click(f);
         }
-        div()
+        let key = (id, "tile");
+        let hovered = expand.is_some() && enabled && cx.hovered(key) && !cx.hovered(id);
+        let bg = if hovered && cx.mouse_down {
+            t.module.alpha(2.2)
+        } else if hovered {
+            t.module.alpha(1.6)
+        } else {
+            t.module
+        };
+        let mut tile = div()
+            .id(key)
+            .w(HALF)
+            .h(56.0)
+            .pl(12.0)
+            .pr(8.0)
+            .rounded(12.0)
+            .bg(bg)
             .flex_row()
             .items_center()
             .gap(9.0)
@@ -144,10 +211,41 @@ impl Shell {
                     .min_w_0()
                     .child(text(label.to_string()).size(12.5).weight(Weight::Semibold).truncate())
                     .child(text(detail).size(11.0).color(t.secondary).truncate()),
-            )
+            );
+        if let Some(m) = expand.filter(|_| enabled) {
+            let ink = t.tertiary;
+            tile = tile
+                .on_click(move |s: &mut Self, cx: &mut Cx| s.expand(m, cx))
+                .child(canvas(move |s, b| icons::chevron_sized(s, b, ink, true, 9.0, 1.6)).w(12.0).h(16.0).shrink_0());
+        }
+        tile
     }
 
-    fn slider_module(&self, title: &str, which: Slider, level: f32, muted: bool, t: &Theme) -> Div<Self> {
+    /// A titled slider module; with `expand`, its title row opens a module.
+    #[allow(clippy::too_many_arguments)]
+    fn slider_module(&self, title: &str, which: Slider, level: f32, muted: bool, expand: Option<Module>, cx: &Cx, t: &Theme) -> Div<Self> {
+        let mut head = div().flex_row().items_center().justify_between().h(18.0).child(text(title.to_string()).size(12.5).weight(Weight::Semibold));
+        if let Some(m) = expand {
+            let key = ("cc-expand", m as usize);
+            let ink = if cx.hovered(key) { t.label } else { t.tertiary };
+            head = head.id(key).on_click(move |s: &mut Self, cx: &mut Cx| s.expand(m, cx)).child(
+                canvas(move |s, b| icons::chevron_sized(s, b, ink, true, 9.0, 1.6)).w(12.0).h(16.0),
+            );
+        }
+        div()
+            .rounded(12.0)
+            .bg(t.module)
+            .flex_col()
+            .gap(8.0)
+            .px(12.0)
+            .pt(10.0)
+            .pb(12.0)
+            .child(head)
+            .child(self.slider_bar(which, level, muted, t))
+    }
+
+    /// The slider itself: a capsule track filled to `level` with a knob.
+    pub(super) fn slider_bar(&self, which: Slider, level: f32, muted: bool, t: &Theme) -> Div<Self> {
         let cell = self.sliders[which as usize].clone();
         let (track, fill, icon_on_fill, icon_off) = if t.dark {
             (rgba(0xffffff, 0.12), rgba(0xffffff, 0.92), rgb(0x3a3a3c), rgba(0xffffff, 0.75))
@@ -173,25 +271,14 @@ impl Shell {
             }
         };
         div()
-            .rounded(12.0)
-            .bg(t.module)
-            .flex_col()
-            .gap(8.0)
-            .px(12.0)
-            .pt(10.0)
-            .pb(12.0)
-            .child(text(title.to_string()).size(12.5).weight(Weight::Semibold))
-            .child(
-                div()
-                    .id(("cc-slider", which as usize))
-                    .h(24.0)
-                    .w_full()
-                    .on_mouse_down(move |s: &mut Self, cx: &mut Cx| {
-                        s.dragging = Some(which);
-                        s.drag(cx);
-                    })
-                    .child(canvas(paint).w_full().h(24.0)),
-            )
+            .id(("cc-slider", which as usize))
+            .h(24.0)
+            .w_full()
+            .on_mouse_down(move |s: &mut Self, cx: &mut Cx| {
+                s.dragging = Some(which);
+                s.drag(cx);
+            })
+            .child(canvas(paint).w_full().h(24.0))
     }
 
     /// Follows the pointer while a slider is held.

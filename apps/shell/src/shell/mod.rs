@@ -9,11 +9,13 @@
 //!   above it, after a moment's hover.
 //!
 //! Flyouts slide and fade in and out; the animation runs on `next_wake`
-//! ticks only while it's moving.
+//! ticks only while it's moving. Start's All apps list and Control Center's
+//! expanded modules (Wi-Fi, Bluetooth, Sound) swap in the same way.
 
 mod bar;
 mod calendar;
 mod control;
+mod control_detail;
 mod dialogs;
 mod icons;
 mod notifications;
@@ -37,8 +39,9 @@ use crate::desktops::Desktops;
 use crate::files::FileIndex;
 use crate::ipc::Command;
 use crate::notify::{self, Store};
+use crate::recent::RecentFile;
 use crate::search::Section;
-use crate::system::{Request, Services, SessionAction, Status, System};
+use crate::system::{Network, Request, Services, SessionAction, Status, System};
 use crate::taskbar::{self, Click, DesktopAction, Item, Pins, ShowDesktop};
 use crate::toplevel::{Toplevels, Window, WindowAction};
 use theme::Theme;
@@ -56,6 +59,8 @@ const SLIDE: f32 = 8.0;
 const OPEN: Duration = Duration::from_millis(180);
 const CLOSE: Duration = Duration::from_millis(140);
 const FRAME: Duration = Duration::from_millis(16);
+/// Switching a flyout's view (Start's All apps, an expanded module).
+const SWAP: Duration = Duration::from_millis(220);
 /// How long the pointer rests on a taskbar button before its name shows.
 const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
 
@@ -82,6 +87,22 @@ pub enum Panel {
     /// A taskbar button's right-click menu (see `Shell::task_menu`).
     TaskMenu,
     Confirm(SessionAction),
+}
+
+/// What Start shows when not searching.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StartView {
+    Home,
+    AllApps,
+}
+
+/// Control Center's main grid, or one module expanded to fill it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Module {
+    Main,
+    Wifi,
+    Bluetooth,
+    Sound,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,6 +177,20 @@ pub struct Shell {
     hover: Option<Hover>,
     /// An app's right-click menu in Start, and where it was opened.
     start_menu: Option<(String, Point)>,
+    start_view: StartView,
+    /// The app picked with the arrow keys in Pinned or All apps.
+    start_sel: Option<usize>,
+    /// Start's "Recent", loaded in the background when it opens.
+    pub recent_files: Arc<Mutex<Vec<RecentFile>>>,
+    module: Module,
+    /// When Start or Control Center last switched views, and whether it
+    /// went in (All apps, a module) or back out.
+    swap: Option<(Instant, bool)>,
+    /// The secured network a password is being typed for, the field, and
+    /// what was typed (the field only shows dots).
+    wifi_pick: Option<Network>,
+    password: Rc<RefCell<TextInput>>,
+    secret: String,
     /// Months away from this one in the calendar flyout.
     month_offset: i32,
     user: User,
@@ -210,6 +245,7 @@ impl Shell {
         }
 
         let query = TextInput::new(&mut cx.text.fonts, TextStyle::default(), true);
+        let password = TextInput::new(&mut cx.text.fonts, TextStyle::default(), true);
         let apps = apps::load(&apps::dirs());
         // Until the user pins things here, what's pinned in KDE's panel.
         let pins_file = data_dir.as_ref().map(|d| d.join("taskbar-pins"));
@@ -252,6 +288,14 @@ impl Shell {
             task_menu: None,
             hover: None,
             start_menu: None,
+            start_view: StartView::Home,
+            start_sel: None,
+            recent_files: Arc::default(),
+            module: Module::Main,
+            swap: None,
+            wifi_pick: None,
+            password: Rc::new(RefCell::new(password)),
+            secret: String::new(),
             month_offset: 0,
             user: dialogs::current_user(),
             shown_panel: false,
@@ -277,6 +321,13 @@ impl Shell {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// Lets the worker finish what was just asked of it, then picks up its
+    /// status (for snapshots).
+    pub fn settle_status(&mut self) {
+        std::thread::sleep(Duration::from_millis(150));
+        self.status = self.services.status();
     }
 
     /// Builds the file index in the background, or refreshes it.
@@ -414,6 +465,11 @@ impl Shell {
         self.anim_waiting = true;
         self.dragging = None;
         self.start_menu = None;
+        self.start_view = StartView::Home;
+        self.start_sel = None;
+        self.module = Module::Main;
+        self.swap = None;
+        self.forget_password(cx);
         cx.blur();
         if matches!(panel, Panel::Spotlight | Panel::Start) {
             self.query.borrow_mut().set_text(&mut cx.text.fonts, "");
@@ -426,13 +482,15 @@ impl Shell {
         }
         if panel == Panel::Start {
             cx.scroll_to_top("start-all");
+            self.load_recent();
         }
         if panel == Panel::Calendar {
             self.month_offset = 0;
         }
         if panel == Panel::QuickSettings {
             // Things nobody signals about: refresh on open.
-            for p in [crate::system::Part::Bluetooth, crate::system::Part::Brightness, crate::system::Part::Wifi] {
+            use crate::system::Part;
+            for p in [Part::Bluetooth, Part::Brightness, Part::Wifi, Part::Outputs] {
                 self.services.send(Request::Refresh(p));
             }
         }
@@ -459,6 +517,41 @@ impl Shell {
         self.open(panel, cx);
         self.anim = None;
         self.anim_waiting = false;
+    }
+
+    /// Starts a flyout's view switch; `deeper` slides the new view in from
+    /// the right, like a navigation push.
+    fn start_swap(&mut self, deeper: bool, cx: &mut Cx) {
+        self.swap = Some((Instant::now(), deeper));
+        cx.request_redraw();
+    }
+
+    /// Wraps a flyout's content for its view switch: it fades in, sliding
+    /// from the side it came from. `width` is the content's.
+    fn swapping(&self, content: Div<Self>, width: f32) -> Div<Self> {
+        let Some((start, deeper)) = self.swap else { return content };
+        let t = (start.elapsed().as_secs_f32() / SWAP.as_secs_f32()).clamp(0.0, 1.0);
+        let eased = 1.0 - (1.0 - t).powi(3);
+        let dx = (1.0 - eased) * 28.0 * if deeper { 1.0 } else { -1.0 };
+        div().w(width).flex_col().child(content.w(width).ml(dx).opacity(eased.powf(0.7)))
+    }
+
+    /// Reads recently used files off the UI thread.
+    fn load_recent(&self) {
+        let Some(xbel) = crate::recent::xbel_path().filter(|_| self.files_root.is_some()) else { return };
+        let (recent, wake) = (self.recent_files.clone(), self.wake.clone());
+        std::thread::Builder::new()
+            .name("recent".into())
+            .spawn(move || {
+                let files = crate::recent::load(&xbel, 6);
+                let mut r = recent.lock().unwrap();
+                if *r != files {
+                    *r = files;
+                    drop(r);
+                    wake();
+                }
+            })
+            .expect("recent thread");
     }
 
     /// How far the drawn panel is in: 0 hidden, 1 fully shown (ease-out).
@@ -639,13 +732,21 @@ impl App for Shell {
             } else if searching {
                 self.query.borrow_mut().set_text(&mut cx.text.fonts, "");
                 self.update_results();
+            } else if self.panel == Panel::Start && self.start_view != StartView::Home {
+                self.show_start_view(StartView::Home, cx);
+            } else if self.panel == Panel::QuickSettings && self.wifi_pick.is_some() {
+                self.forget_password(cx);
+            } else if self.panel == Panel::QuickSettings && self.module != Module::Main {
+                self.expand(Module::Main, cx);
             } else {
                 self.close(cx);
             }
             return true;
         }
         match self.panel {
+            Panel::Start if self.query.borrow().is_empty() => self.start_key(key, cx),
             Panel::Spotlight | Panel::Start => self.search_key(key, cx),
+            Panel::QuickSettings if self.wifi_pick.is_some() => self.password_key(key, cx),
             Panel::Confirm(action) if key.is_named(NamedKey::Enter) => {
                 self.session(action, cx);
                 true
@@ -656,6 +757,7 @@ impl App for Shell {
 
     fn on_input(&mut self, id: ElementId, _cx: &mut Cx) {
         if id == eid("spotlight-input") || id == eid("start-input") {
+            self.start_sel = None;
             self.update_results();
         }
     }
@@ -683,11 +785,20 @@ impl App for Shell {
         if let Some(h) = self.hover.as_ref().filter(|h| h.since.elapsed() < TOOLTIP_DELAY) {
             next = next.min(h.since + TOOLTIP_DELAY);
         }
+        if self.swap.is_some() {
+            next = next.min(Instant::now() + FRAME);
+        }
+        if self.spinning() {
+            next = next.min(Instant::now() + ui::widgets::SPINNER_FRAME);
+        }
         Some(next)
     }
 
     fn on_wake(&mut self, cx: &mut Cx) {
         self.settle();
+        if self.swap.is_some_and(|(start, _)| start.elapsed() >= SWAP) {
+            self.swap = None;
+        }
         let hovered = self.hovered_banner(cx);
         self.store.lock().unwrap().expire(Instant::now(), hovered);
         self.flush_signals();
@@ -696,6 +807,10 @@ impl App for Shell {
 
     fn on_external(&mut self, cx: &mut Cx) {
         self.status = self.services.status();
+        // The network a password was typed for has joined.
+        if self.wifi_pick.as_ref().is_some_and(|p| self.status.networks.iter().any(|n| n.active && n.ssid == p.ssid)) {
+            self.forget_password(cx);
+        }
         if let Some(t) = &self.toplevels {
             self.windows = t.windows();
             if let Some(w) = self.windows.iter().find(|w| w.activated) {

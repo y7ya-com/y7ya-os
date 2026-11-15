@@ -15,6 +15,7 @@ mod desktops;
 mod files;
 mod ipc;
 mod notify;
+mod recent;
 mod search;
 mod shell;
 mod system;
@@ -25,7 +26,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use shell::{Config, Panel, Shell};
+use shell::{Config, Module, Panel, Shell};
 use system::{FakeSystem, RealSystem, System};
 
 fn main() {
@@ -62,6 +63,15 @@ fn main() {
             println!("volume:     {:?}", sys.volume());
             println!("brightness: {:?}", sys.brightness());
             println!("media:      {:?}", sys.media());
+            for n in sys.networks() {
+                println!("network:    {n:?}");
+            }
+            for d in sys.bt_devices() {
+                println!("device:     {d:?}");
+            }
+            for o in sys.outputs() {
+                println!("output:     {o:?}");
+            }
         }
         Some("--help" | "-h") => {
             println!("usage: y7-shell [msg <command> | --snapshot <dir> [--light]]\n{}", ipc::USAGE);
@@ -97,30 +107,75 @@ fn snapshots(dir: &std::path::Path, dark: bool) {
         demo_notifications(&s);
         s.windows = demo_windows();
         s.desktops = desktops::Desktops::fixed(demo_spaces());
+        *s.recent_files.lock().unwrap() = demo_recent();
         s.preload_icons();
         s
     };
-    let shots: [(&str, &str, (f32, f32), Panel); 7] = [
-        ("taskbar", shell::BAR, (1440.0, shell::BAR_H), Panel::None),
-        ("start", shell::PANEL, screen, Panel::Start),
-        ("spotlight", shell::PANEL, screen, Panel::Spotlight),
-        ("quick-settings", shell::PANEL, screen, Panel::QuickSettings),
-        ("calendar", shell::PANEL, screen, Panel::Calendar),
-        ("confirm", shell::PANEL, screen, Panel::Confirm(system::SessionAction::ShutDown)),
-        ("banners", shell::BANNERS, (388.0, 260.0), Panel::None),
+    // What to do once a panel is open.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Then {
+        Nothing,
+        Search(&'static str),
+        AllApps,
+        Expand(Module),
+        TypePassword(&'static str),
+    }
+    let shots: [(&str, &str, (f32, f32), Panel, Then); 13] = [
+        ("taskbar", shell::BAR, (1440.0, shell::BAR_H), Panel::None, Then::Nothing),
+        ("start", shell::PANEL, screen, Panel::Start, Then::Nothing),
+        ("start-all-apps", shell::PANEL, screen, Panel::Start, Then::AllApps),
+        ("start-search", shell::PANEL, screen, Panel::Start, Then::Search("te")),
+        ("spotlight", shell::PANEL, screen, Panel::Spotlight, Then::Search("te")),
+        ("quick-settings", shell::PANEL, screen, Panel::QuickSettings, Then::Nothing),
+        ("quick-settings-wifi", shell::PANEL, screen, Panel::QuickSettings, Then::Expand(Module::Wifi)),
+        ("quick-settings-wifi-join", shell::PANEL, screen, Panel::QuickSettings, Then::TypePassword("Rivers-5G")),
+        ("quick-settings-bluetooth", shell::PANEL, screen, Panel::QuickSettings, Then::Expand(Module::Bluetooth)),
+        ("quick-settings-sound", shell::PANEL, screen, Panel::QuickSettings, Then::Expand(Module::Sound)),
+        ("calendar", shell::PANEL, screen, Panel::Calendar, Then::Nothing),
+        ("confirm", shell::PANEL, screen, Panel::Confirm(system::SessionAction::ShutDown), Then::Nothing),
+        ("banners", shell::BANNERS, (388.0, 260.0), Panel::None, Then::Nothing),
     ];
-    for (name, layer, size, panel) in shots {
+    for (name, layer, size, panel, then) in shots {
         let path = dir.join(format!("{name}-{suffix}.png"));
         ui::snapshot_layer(layer, size, 2.0, dark, &path, make, |s, cx| {
             if panel != Panel::None {
                 s.open_now(panel, cx);
             }
-            if panel == Panel::Spotlight {
-                s.set_query("te", cx);
+            match then {
+                Then::Nothing => {}
+                Then::Search(q) => s.set_query(q, cx),
+                Then::AllApps => s.show_all_apps_now(cx),
+                Then::Expand(m) => s.expand_now(m, cx),
+                Then::TypePassword(ssid) => {
+                    s.expand_now(Module::Wifi, cx);
+                    s.type_password_now(ssid, "hunter22", cx);
+                }
             }
+            // The scan a module starts.
+            s.settle_status();
         });
         println!("{}", path.display());
     }
+}
+
+/// Recent files for Start's snapshot.
+fn demo_recent() -> Vec<recent::RecentFile> {
+    let now = chrono::Utc::now();
+    [
+        ("~/Documents/Quarterly plan.pdf", 4),
+        ("~/Pictures/Screenshot 2026-11-14.png", 52),
+        ("~/Documents/Notes/Design review.md", 180),
+        ("~/Projects/y7ya-os", 60 * 26),
+        ("~/Downloads/brand-assets.zip", 60 * 50),
+        ("~/Documents/Budget 2027.xlsx", 60 * 24 * 9),
+    ]
+    .into_iter()
+    .map(|(p, mins)| recent::RecentFile {
+        path: p.into(),
+        is_dir: !p.contains('.') || p.ends_with("y7ya-os"),
+        used: now - chrono::Duration::minutes(mins),
+    })
+    .collect()
 }
 
 /// A few windows of apps most machines have, one active and one minimized.

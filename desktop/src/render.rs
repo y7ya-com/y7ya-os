@@ -26,7 +26,9 @@ use smithay::backend::renderer::gles::{
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
 use smithay::desktop::{PopupManager, Window, layer_map_for_output};
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
+use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 use smithay::wayland::compositor::with_states;
+use smithay::wayland::presentation::Refresh;
 use smithay::wayland::shell::wlr_layer::Layer;
 use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 
@@ -916,15 +918,26 @@ impl RenderElement<GlesRenderer> for WindowSurface {
     }
 }
 
-/// Frame callbacks for everything visible, so clients draw their next frame.
+/// Frame callbacks for everything visible, so clients draw their next frame,
+/// and presentation feedback for those that want to know when it showed.
 pub fn send_frames(desk: &Desk) {
     let Some(output) = desk.output.clone() else { return };
     let time = desk.start.elapsed();
+    let mut feedback = smithay::desktop::utils::OutputPresentationFeedback::new(&output);
+    let on_output = |_: &_, _: &_| Some(output.clone());
+    let no_flags = |_: &_, _: &_| wp_presentation_feedback::Kind::empty();
     for window in desk.space.elements() {
         window.send_frame(&output, time, Some(Duration::ZERO), |_, _| Some(output.clone()));
+        window.take_presentation_feedback(&mut feedback, on_output, no_flags);
     }
     // The menu bar and panels too, or they'd stall waiting to present.
     for layer in layer_map_for_output(&output).layers() {
         layer.send_frame(&output, time, Some(Duration::ZERO), |_, _| Some(output.clone()));
+        layer.take_presentation_feedback(&mut feedback, on_output, no_flags);
     }
+    let refresh = output.current_mode().map_or(Refresh::Unknown, |m| {
+        Refresh::Fixed(Duration::from_secs_f64(1000.0 / m.refresh.max(1) as f64))
+    });
+    let now = smithay::utils::Clock::<smithay::utils::Monotonic>::new().now();
+    feedback.presented(now, refresh, 0, wp_presentation_feedback::Kind::Vsync);
 }

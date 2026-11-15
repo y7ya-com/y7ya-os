@@ -8,10 +8,12 @@ use smithay::backend::input::{
     PointerButtonEvent, PointerMotionEvent,
 };
 use smithay::input::keyboard::{FilterResult, Keycode, keysyms};
-use smithay::input::pointer::{AxisFrame, ButtonEvent, Focus, GrabStartData, MotionEvent};
+use smithay::input::pointer::{AxisFrame, ButtonEvent, CursorIcon, Focus, GrabStartData, MotionEvent, RelativeMotionEvent};
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
+use smithay::wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitorSeat;
 use smithay::wayland::shell::wlr_layer::Layer;
 
+use crate::extras::Constraint;
 use crate::grabs::{MoveGrab, ResizeGrab};
 use crate::state::{Button, Desk, Hit};
 
@@ -43,7 +45,29 @@ impl Desk {
                 self.key(event.key_code(), event.state(), event.time_msec());
             }
             InputEvent::PointerMotion { event } => {
-                let pos = self.seat.get_pointer().unwrap().current_location() + event.delta();
+                let pointer = self.seat.get_pointer().unwrap();
+                let here = pointer.current_location();
+                let focus = self.surface_under(here);
+                let raw = RelativeMotionEvent { delta: event.delta(), delta_unaccel: event.delta_unaccel(), utime: event.time() };
+                pointer.relative_motion(self, focus.clone(), &raw);
+                let mut pos = here + event.delta();
+                match self.pointer_constraint() {
+                    Constraint::Locked => {
+                        pointer.frame(self);
+                        return;
+                    }
+                    Constraint::Confined => {
+                        // Inside the window under it (its content, not our title bar).
+                        if let Some(w) = focus.and_then(|(s, _)| self.window_for_surface(&s)) {
+                            if let Some(loc) = self.space.element_location(&w) {
+                                let size = w.geometry().size;
+                                pos.x = pos.x.clamp(loc.x as f64, (loc.x + size.w) as f64 - 1.0);
+                                pos.y = pos.y.clamp(loc.y as f64, (loc.y + size.h) as f64 - 1.0);
+                            }
+                        }
+                    }
+                    Constraint::None => {}
+                }
                 self.pointer_to(pos, event.time_msec());
             }
             InputEvent::PointerMotionAbsolute { event } => {
@@ -94,8 +118,11 @@ impl Desk {
             let command = mods.logo || (_desk.nested && mods.ctrl && mods.alt);
             let is_super = matches!(sym.raw(), keysyms::KEY_Super_L | keysyms::KEY_Super_R);
             // Super pressed and released on its own opens Start, as on Windows.
+            // A focused app that took the shortcuts (a nested desktop) gets
+            // Super and friends; only the escape hatches below stay ours.
+            let inhibited = _desk.seat.keyboard_shortcuts_inhibited();
             if state == KeyState::Pressed {
-                _desk.super_alone = is_super;
+                _desk.super_alone = is_super && !inhibited;
             } else if is_super && std::mem::take(&mut _desk.super_alone) && !switching {
                 return FilterResult::Intercept(Action::Spawn("y7-shell msg start"));
             }
@@ -119,6 +146,9 @@ impl Desk {
             if mods.ctrl && mods.alt && sym.raw() == keysyms::KEY_BackSpace {
                 return FilterResult::Intercept(Action::Quit);
             }
+            if inhibited {
+                return FilterResult::Forward;
+            }
             if mods.ctrl && !mods.alt && !mods.shift && sym.raw() == keysyms::KEY_Escape {
                 return FilterResult::Intercept(Action::Spawn("y7-shell msg start"));
             }
@@ -126,11 +156,22 @@ impl Desk {
             if mods.ctrl && mods.shift && sym.raw() == keysyms::KEY_Escape {
                 return FilterResult::Intercept(Action::Spawn("taskmanager"));
             }
+            // KDE's desktop shortcuts, so muscle memory carries over:
+            // Ctrl+F1..F9 or Meta+F1..F9 for a desktop.
+            if (mods.ctrl || mods.logo) && !mods.alt && !mods.shift && (keysyms::KEY_F1..=keysyms::KEY_F9).contains(&sym.raw()) {
+                return FilterResult::Intercept(Action::SpaceAt((sym.raw() - keysyms::KEY_F1) as usize));
+            }
             if !command {
                 return FilterResult::Forward;
             }
             let action = match lower {
-                keysyms::KEY_q | keysyms::KEY_w => Action::Close,
+                // Meta+Ctrl+Left/Right moves one desktop over, as in KDE.
+                keysyms::KEY_Left if mods.ctrl => Action::Space(-1),
+                keysyms::KEY_Right if mods.ctrl => Action::Space(1),
+                keysyms::KEY_d => Action::Spawn("y7-shell msg show-desktop"),
+                keysyms::KEY_q => Action::Close,
+                // KDE's Overview shortcut.
+                keysyms::KEY_w => Action::MissionControl,
                 keysyms::KEY_m if mods.shift => Action::Unminimize,
                 keysyms::KEY_m => Action::Minimize,
                 keysyms::KEY_f => Action::Zoom,
@@ -201,7 +242,17 @@ impl Desk {
             self.mc_hover(pos);
             return;
         }
-        let under = if self.deco_hit(pos).is_some() { None } else { self.surface_under(pos) };
+        let hit = self.deco_hit(pos);
+        let under = if hit.is_some() { None } else { self.surface_under(pos) };
+        // Off any app, the pointer is ours to pick: a resize arrow over window
+        // edges, the plain arrow elsewhere.
+        if under.is_none() && !pointer.is_grabbed() {
+            let icon = match &hit {
+                Some((_, Hit::Resize(edges))) => edges.cursor(),
+                _ => CursorIcon::Default,
+            };
+            self.set_named_cursor(icon);
+        }
         pointer.motion(self, under, &MotionEvent { location: pos, serial: SERIAL_COUNTER.next_serial(), time });
         pointer.frame(self);
         if self.draws_cursor {
@@ -267,6 +318,7 @@ impl Desk {
                 }
                 Some((window, Hit::Resize(edges))) => {
                     self.focus(Some(window.clone()));
+                    self.set_named_cursor(edges.cursor());
                     if let Some(loc) = self.space.element_location(&window) {
                         let initial = Rectangle::new(loc, window.geometry().size);
                         let start_data = GrabStartData { focus: None, button, location: pos };

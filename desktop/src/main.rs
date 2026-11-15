@@ -5,14 +5,19 @@
 //! `y7-desktop --headless [WxH] [--scale S]` renders offscreen and reads test
 //! commands from stdin (see `backend/headless.rs`).
 //! `-c <command>` starts a program once the desktop is up.
+//! `y7-desktop msg <command>` talks to the running desktop (see `ipc.rs`),
+//! e.g. `y7-desktop msg space 1` or `y7-desktop msg activate org.kde.konsole`.
 
 mod anim;
 mod backend;
 mod config;
+mod cursor;
+mod extras;
 mod grabs;
 mod handlers;
 mod icons;
 mod input;
+mod ipc;
 mod layers;
 mod overview;
 mod render;
@@ -29,6 +34,9 @@ fn main() -> anyhow::Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()))
         .init();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "msg") {
+        return msg(&args[1..].join(" "));
+    }
     let flag = |name: &str| args.iter().position(|a| a == name);
     let value = |name: &str| flag(name).and_then(|i| args.get(i + 1)).cloned();
 
@@ -52,6 +60,7 @@ fn main() -> anyhow::Result<()> {
         after = Some(backend::winit::init(&mut event_loop, &mut desk)?);
     }
     println!("WAYLAND_DISPLAY={}", desk.socket_name.to_string_lossy());
+    ipc::init(&mut desk);
     config::init(&event_loop.handle(), &mut desk);
     desk.start_xwayland();
     if flag("--session").is_some() {
@@ -70,9 +79,33 @@ fn main() -> anyhow::Result<()> {
             after(desk);
         }
         desk.refresh_toplevels();
+        desk.publish_spaces();
         // Send replies to clients after every round of requests.
         let _ = desk.display_handle.flush_clients();
     })?;
+    Ok(())
+}
+
+/// Sends one command to the running desktop and prints what it says back.
+fn msg(command: &str) -> anyhow::Result<()> {
+    use std::io::{BufRead, Write};
+    let display = std::env::var_os("WAYLAND_DISPLAY").unwrap_or_else(|| "wayland-0".into());
+    let path = ipc::socket_path(&display);
+    let mut stream = std::os::unix::net::UnixStream::connect(&path)
+        .map_err(|e| anyhow::anyhow!("no y7ya-os desktop at {}: {e}", path.display()))?;
+    writeln!(stream, "{command}")?;
+    let watching = command.trim() == "watch";
+    if !watching {
+        // Commands that don't answer just end the conversation.
+        stream.set_read_timeout(Some(std::time::Duration::from_millis(500)))?;
+    }
+    for line in std::io::BufReader::new(stream).lines() {
+        let Ok(line) = line else { break };
+        println!("{line}");
+        if !watching {
+            break;
+        }
+    }
     Ok(())
 }
 

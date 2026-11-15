@@ -5,7 +5,7 @@ use std::cell::RefCell;
 
 use smithay::desktop::Window;
 use smithay::input::pointer::{
-    AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent,
+    AxisFrame, CursorIcon, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent,
     GesturePinchEndEvent, GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent,
     GestureSwipeUpdateEvent, GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle, RelativeMotionEvent,
 };
@@ -123,6 +123,20 @@ bitflags::bitflags! {
         const BOTTOM = 0b0010;
         const LEFT = 0b0100;
         const RIGHT = 0b1000;
+    }
+}
+
+impl Edges {
+    /// The pointer shown while hovering or dragging these edges.
+    pub fn cursor(self) -> CursorIcon {
+        let vertical = self.intersects(Edges::TOP | Edges::BOTTOM);
+        let horizontal = self.intersects(Edges::LEFT | Edges::RIGHT);
+        match (vertical, horizontal) {
+            (true, true) if self == Edges::TOP | Edges::LEFT || self == Edges::BOTTOM | Edges::RIGHT => CursorIcon::NwseResize,
+            (true, true) => CursorIcon::NeswResize,
+            (true, false) => CursorIcon::NsResize,
+            _ => CursorIcon::EwResize,
+        }
     }
 }
 

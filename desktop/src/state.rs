@@ -58,7 +58,7 @@ pub const TITLEBAR_H: i32 = 32;
 /// Window corner radius (macOS 26 uses generous radii).
 pub const RADIUS: f32 = 14.0;
 /// How far outside a window's edge the resize handles reach.
-const RESIZE_BAND: i32 = 6;
+const RESIZE_BAND: i32 = 8;
 /// Traffic lights: first center from the left edge, spacing between centers, radius.
 pub const LIGHT_X: f64 = 18.0;
 pub const LIGHT_GAP: f64 = 20.0;
@@ -107,6 +107,7 @@ pub struct Desk {
     pub minimized: Vec<Window>,
     pub minimizing: Vec<Minimizing>,
     pub closing: Vec<Closing>,
+    pub ipc: crate::ipc::Ipc,
     /// Where a window being dragged would tile if dropped now.
     pub snap_preview: Option<Rectangle<i32, Logical>>,
     /// New windows wait here until their first frame arrives.
@@ -121,6 +122,11 @@ pub struct Desk {
     pub data_device_state: DataDeviceState,
     pub primary_selection_state: PrimarySelectionState,
     pub viewporter_state: ViewporterState,
+    pub single_pixel_state: smithay::wayland::single_pixel_buffer::SinglePixelBufferState,
+    pub relative_pointer_state: smithay::wayland::relative_pointer::RelativePointerManagerState,
+    pub shortcuts_inhibit_state: smithay::wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitState,
+    pub pointer_constraints_state: smithay::wayland::pointer_constraints::PointerConstraintsState,
+    pub presentation_state: smithay::wayland::presentation::PresentationState,
     pub layer_shell_state: WlrLayerShellState,
     pub fractional_scale_state: smithay::wayland::fractional_scale::FractionalScaleManagerState,
     pub activation_state: smithay::wayland::xdg_activation::XdgActivationState,
@@ -168,6 +174,12 @@ impl Desk {
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let primary_selection_state = PrimarySelectionState::new::<Self>(&dh);
         let viewporter_state = ViewporterState::new::<Self>(&dh);
+        let single_pixel_state = smithay::wayland::single_pixel_buffer::SinglePixelBufferState::new::<Self>(&dh);
+        let relative_pointer_state = smithay::wayland::relative_pointer::RelativePointerManagerState::new::<Self>(&dh);
+        let shortcuts_inhibit_state = smithay::wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitState::new::<Self>(&dh);
+        let pointer_constraints_state = smithay::wayland::pointer_constraints::PointerConstraintsState::new::<Self>(&dh);
+        // CLOCK_MONOTONIC, which `send_frames` reports times in.
+        let presentation_state = smithay::wayland::presentation::PresentationState::new::<Self>(&dh, 1);
         let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
         let fractional_scale_state = smithay::wayland::fractional_scale::FractionalScaleManagerState::new::<Self>(&dh);
         let activation_state = smithay::wayland::xdg_activation::XdgActivationState::new::<Self>(&dh);
@@ -208,6 +220,7 @@ impl Desk {
             minimized: Vec::new(),
             minimizing: Vec::new(),
             closing: Vec::new(),
+            ipc: Default::default(),
             snap_preview: None,
             unmapped: Vec::new(),
             compositor_state,
@@ -219,6 +232,11 @@ impl Desk {
             data_device_state,
             primary_selection_state,
             viewporter_state,
+            single_pixel_state,
+            relative_pointer_state,
+            shortcuts_inhibit_state,
+            pointer_constraints_state,
+            presentation_state,
             layer_shell_state,
             fractional_scale_state,
             activation_state,
@@ -299,16 +317,30 @@ impl Desk {
         Some(frame_of(window, loc))
     }
 
+    /// Shows one of the theme's cursors (when no app is choosing it).
+    pub fn set_named_cursor(&mut self, icon: smithay::input::pointer::CursorIcon) {
+        if !matches!(self.cursor_status, smithay::input::pointer::CursorImageStatus::Named(i) if i == icon) {
+            self.cursor_status = smithay::input::pointer::CursorImageStatus::Named(icon);
+            if self.draws_cursor {
+                self.redraw();
+            }
+        }
+    }
+
     /// What the pointer would hit in our window chrome at `pos`, if anything.
     pub fn deco_hit(&self, pos: Point<f64, Logical>) -> Option<(Window, Hit)> {
         for window in self.space.elements().rev() {
             let Some(frame) = self.frame(window) else { continue };
             if !is_ssd(window) {
-                // Client-drawn windows handle their own edges; just stop at them.
+                // Client-drawn windows handle the edges inside them; we add
+                // handles just outside, unless the app draws its own shadow
+                // (and resizes from that).
                 if self.space.element_bbox(window).is_some_and(|b| b.to_f64().contains(pos)) {
                     return None;
                 }
-                continue;
+                if window.geometry().loc != Point::from((0, 0)) {
+                    continue;
+                }
             }
             let band = Rectangle::new(
                 frame.loc - Point::from((RESIZE_BAND, RESIZE_BAND)),
@@ -335,7 +367,7 @@ impl Desk {
                 edges |= Edges::BOTTOM;
             }
             if !inside || edges.contains(Edges::BOTTOM) {
-                if edges.is_empty() {
+                if edges.is_empty() || !resizable(window) {
                     continue;
                 }
                 return Some((window.clone(), Hit::Resize(edges)));
@@ -627,6 +659,18 @@ impl Desk {
 pub fn win_data(window: &Window) -> &RefCell<WinData> {
     window.user_data().insert_if_missing(|| RefCell::new(WinData::default()));
     window.user_data().get::<RefCell<WinData>>().unwrap()
+}
+
+/// Whether the app lets the window change size (its minimum and maximum
+/// sizes differ).
+pub fn resizable(window: &Window) -> bool {
+    let Some(toplevel) = window.toplevel() else { return false };
+    let (min, max) = smithay::wayland::compositor::with_states(toplevel.wl_surface(), |states| {
+        let mut guard = states.cached_state.get::<smithay::wayland::shell::xdg::SurfaceCachedState>();
+        let data = guard.current();
+        (data.min_size, data.max_size)
+    });
+    max.w == 0 || max.h == 0 || min != max
 }
 
 /// Whether we draw this window's title bar (it asked for server-side decorations).

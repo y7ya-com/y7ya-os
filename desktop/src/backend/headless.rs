@@ -203,6 +203,10 @@ fn evdev_code(name: &str) -> Option<u32> {
         "down" => 108,
         "left" => 105,
         "right" => 106,
+        // F1..F10 are 59..68.
+        k if k.len() >= 2 && k.starts_with('f') && k[1..].parse::<u32>().is_ok_and(|n| (1..=10).contains(&n)) => {
+            58 + k[1..].parse::<u32>().unwrap()
+        }
         k if k.len() == 1 => {
             let c = k.as_bytes()[0];
             const ROW: &[(u8, u32)] = &[

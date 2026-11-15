@@ -70,7 +70,7 @@ pub struct Spaces {
 impl Default for Spaces {
     fn default() -> Self {
         Spaces {
-            parked: vec![Vec::new(), Vec::new()],
+            parked: vec![Vec::new(); default_space_count()],
             active: 0,
             slide: None,
             mc: Anim::fixed(0.0),
@@ -80,6 +80,26 @@ impl Default for Spaces {
             gesture: None,
         }
     }
+}
+
+/// As many desktops as KDE was set up with (read from `kwinrc`), else two.
+fn default_space_count() -> usize {
+    let text = dirs::config_dir().and_then(|d| std::fs::read_to_string(d.join("kwinrc")).ok()).unwrap_or_default();
+    kwin_desktops(&text).unwrap_or(2)
+}
+
+fn kwin_desktops(kwinrc: &str) -> Option<usize> {
+    let mut in_group = false;
+    for line in kwinrc.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_group = line == "[Desktops]";
+        } else if in_group {
+            if let Some(n) = line.strip_prefix("Number=") {
+                return n.trim().parse::<usize>().ok().map(|n| n.clamp(1, 9));
+            }
+        }
+    }
+    None
 }
 
 /// What's under the pointer in Mission Control.
@@ -452,5 +472,16 @@ impl Desk {
             None => {}
         }
         self.redraw();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn reads_kde_desktop_count() {
+        let rc = "[Desktops]\nId_1=a\nNumber=3\nRows=1\n\n[Other]\nNumber=7\n";
+        assert_eq!(super::kwin_desktops(rc), Some(3));
+        assert_eq!(super::kwin_desktops("[Other]\nNumber=7\n"), None);
+        assert_eq!(super::kwin_desktops("[Desktops]\nNumber=40\n"), Some(9));
     }
 }

@@ -18,6 +18,11 @@ use crate::state::Desk;
 pub fn init(event_loop: &mut EventLoop<'static, Desk>, desk: &mut Desk) -> anyhow::Result<Box<dyn FnMut(&mut Desk)>> {
     let (mut backend, winit) = winit::init::<GlesRenderer>().map_err(|e| anyhow::anyhow!("{e}"))?;
     backend.window().set_title("y7ya-os");
+    // We draw the pointer ourselves, so apps' cursors and our resize
+    // cursors show up the same as in a real session.
+    backend.window().set_cursor_visible(false);
+    desk.draws_cursor = true;
+    let mut cursors = crate::cursor::Cursors::load();
     let size = backend.window_size();
     let scale = backend.window().scale_factor();
     let output = super::add_output(desk, "nested", (size.w, size.h), scale, Transform::Flipped180);
@@ -46,7 +51,9 @@ pub fn init(event_loop: &mut EventLoop<'static, Desk>, desk: &mut Desk) -> anyho
                 let age = backend.buffer_age().unwrap_or(0);
                 let submitted = match backend.bind() {
                     Ok((renderer, mut fb)) => {
-                        let elements = render::elements(desk, &mut look, renderer);
+                        let scale = desk.output.as_ref().map_or(1.0, |o| o.current_scale().fractional_scale());
+                        let mut elements = crate::cursor::elements(desk, renderer, &mut cursors, scale);
+                        elements.extend(render::elements(desk, &mut look, renderer));
                         match damage.render_output(renderer, &mut fb, age, &elements, [0.0, 0.0, 0.0, 1.0]) {
                             Ok(result) => result.damage.cloned(),
                             Err(e) => {

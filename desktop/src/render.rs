@@ -511,6 +511,21 @@ pub fn elements(desk: &mut Desk, look: &mut Look, renderer: &mut GlesRenderer) -
 
     push_snap_preview(&mut cx, preview.take(), &mut out);
 
+    // The desktop's selection box, under every window, like Finder's.
+    if let Some((a, b)) = desk.rubber_band {
+        let rect = Rectangle::<f64, Logical>::new(
+            (a.x.min(b.x), a.y.min(b.y)).into(),
+            ((a.x - b.x).abs().max(1.0), (a.y - b.y).abs().max(1.0)).into(),
+        );
+        let (fill, border) = if dark {
+            ([1.0, 1.0, 1.0, 0.12], [1.0, 1.0, 1.0, 0.55])
+        } else {
+            ([0.0, 0.0, 0.0, 0.10], [1.0, 1.0, 1.0, 0.8])
+        };
+        let band = cx.look.rect("rubber-band", rect.to_i32_round(), 1.0, scale, 2.0, fill, border, 1.0);
+        out.push(DeskElement::Shader(band));
+    }
+
     if mc > 0.0 {
         // Dim the desktop behind Mission Control.
         let dim = cx.look.rect("mc-dim", out_geo, (mc * 0.45) as f32, scale, 0.0, [0.0, 0.0, 0.0, 1.0], [0.0; 4], 0.0);

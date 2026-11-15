@@ -154,6 +154,9 @@ pub struct Desk {
     pub draws_cursor: bool,
     /// A window is being resized: the pointer stays a resize arrow.
     pub resizing: bool,
+    /// A selection box being dragged on the desktop: where it started, where
+    /// the pointer is now.
+    pub rubber_band: Option<(Point<f64, Logical>, Point<f64, Logical>)>,
     /// Switches virtual terminals (only in the real session).
     pub vt_switch: Option<Box<dyn FnMut(i32)>>,
     pub settings_watcher: Option<settings::Watcher>,
@@ -258,6 +261,7 @@ impl Desk {
             cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
             draws_cursor: false,
             resizing: false,
+            rubber_band: None,
             vt_switch: None,
             settings_watcher: None,
             nested: false,
@@ -600,14 +604,43 @@ impl Desk {
     /// Maps a window, cascading new ones from the top-left like macOS.
     pub fn place(&mut self, window: &Window, at: Option<Point<i32, Logical>>) {
         let out = self.usable_area();
+        let fitted = if at.is_none() { self.fit_new_window(window, out) } else { None };
         let loc = at.unwrap_or_else(|| {
-            let size = window.geometry().size;
+            let size = fitted.unwrap_or(window.geometry().size);
             let n = self.space.elements().count() as i32;
+            let top = if is_ssd(window) { TITLEBAR_H } else { 0 };
             let x = out.loc.x + (out.size.w - size.w) / 2 + (n % 6) * 26 - 65;
             let y = out.loc.y + ((out.size.h - size.h) / 3).max(TITLEBAR_H + 8) + (n % 6) * 26 - 40;
-            (x.max(out.loc.x), y.max(out.loc.y + TITLEBAR_H)).into()
+            // Cascade, but keep the whole window on screen where it fits.
+            let (x0, y0) = (out.loc.x + TILE_GAP, out.loc.y + top + TILE_GAP);
+            let x = x.min(out.loc.x + out.size.w - size.w - TILE_GAP).max(x0);
+            let y = y.min(out.loc.y + out.size.h - size.h - TILE_GAP).max(y0);
+            (x, y).into()
         });
         self.space.map_element(window.clone(), loc, true);
+    }
+
+    /// Asks a new window that opened bigger than the free screen to shrink to
+    /// fit, so all its edges can be reached for resizing.
+    /// Returns the size it was asked to take.
+    fn fit_new_window(&self, window: &Window, out: Rectangle<i32, Logical>) -> Option<Size<i32, Logical>> {
+        let toplevel = window.toplevel()?;
+        let size = window.geometry().size;
+        let top = if is_ssd(window) { TITLEBAR_H } else { 0 };
+        let (max_w, max_h) = (out.size.w - 2 * TILE_GAP, out.size.h - top - 2 * TILE_GAP);
+        if size.w <= max_w && size.h <= max_h {
+            return None;
+        }
+        let min = smithay::wayland::compositor::with_states(toplevel.wl_surface(), |states| {
+            states.cached_state.get::<smithay::wayland::shell::xdg::SurfaceCachedState>().current().min_size
+        });
+        let fit = Size::from((size.w.min(max_w).max(min.w), size.h.min(max_h).max(min.h)));
+        if fit == size {
+            return None;
+        }
+        toplevel.with_pending_state(|s| s.size = Some(fit));
+        toplevel.send_pending_configure();
+        Some(fit)
     }
 
     /// Tells clients which pixel formats shared-memory buffers may use.

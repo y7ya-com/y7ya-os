@@ -62,6 +62,9 @@ impl CompositorHandler for Desk {
                     states.data_map.get::<XdgToplevelSurfaceData>().unwrap().lock().unwrap().initial_configure_sent
                 });
                 if !initial_sent {
+                    // How big a window can usefully be: the screen minus the taskbar.
+                    let bounds = self.usable_area().size;
+                    toplevel.with_pending_state(|s| s.bounds = Some(bounds));
                     toplevel.send_configure();
                 } else if let Some(i) = self.unmapped.iter().position(|w| w == &window) {
                     // First real frame: show it, centered, with an open animation.

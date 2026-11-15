@@ -242,6 +242,10 @@ impl Desk {
             self.mc_hover(pos);
             return;
         }
+        if let Some((_, end)) = &mut self.rubber_band {
+            *end = pos;
+            self.redraw();
+        }
         let hit = self.deco_hit(pos);
         let under = if hit.is_some() { None } else { self.surface_under(pos) };
         // Off any app, the pointer is ours to pick: a resize arrow over window
@@ -278,6 +282,9 @@ impl Desk {
             return;
         }
 
+        if state == ButtonState::Released && self.rubber_band.take().is_some() {
+            self.redraw();
+        }
         if state == ButtonState::Released {
             if let Some((window, b)) = self.pressed.take() {
                 self.redraw();
@@ -330,6 +337,11 @@ impl Desk {
                 None if self.layer_under(&[Layer::Overlay, Layer::Top], pos).is_some() => {}
                 None => {
                     let window = self.space.element_under(pos).map(|(w, _)| w.clone());
+                    // Pressing on the bare desktop starts a selection box.
+                    if window.is_none() && button == BTN_LEFT_CODE && self.layer_under(&[Layer::Bottom, Layer::Background], pos).is_none() {
+                        self.rubber_band = Some((pos, pos));
+                        self.redraw();
+                    }
                     if window != self.focused_window() || window.is_none() {
                         self.focus(window);
                     }
@@ -340,6 +352,8 @@ impl Desk {
         pointer.frame(self);
     }
 }
+
+const BTN_LEFT_CODE: u32 = 0x110;
 
 fn desk_switching(desk: &Desk) -> bool {
     desk.spaces.switcher.is_some()

@@ -150,6 +150,8 @@ struct WinLook {
     titlebar: Option<ShaderSlot>,
     title: Option<(String, bool, bool, i32, MemoryRenderBuffer, (i32, i32))>,
     last: Option<LastFrame>,
+    /// Identities for this window's surfaces in Mission Control thumbnails.
+    thumb_ids: HashMap<Id, Id>,
 }
 
 /// What a window showed when last drawn, kept so it can be drawn fading out
@@ -739,16 +741,67 @@ fn mission_control_chrome(desk: &Desk, cx: &mut Ctx, mc: f64, layout: &[(Window,
         let border = if current { [1.0, 1.0, 1.0, 0.95] } else { [1.0, 1.0, 1.0, 0.25] };
         let frame = cx.look.rect(&format!("space-frame-{i}"), t.to_i32_round(), a, scale, 8.0, [0.0; 4], border, if current { 2.5 } else { 1.0 });
         out.push(DeskElement::Shader(frame));
-        let program = cx.look.shaders.wallpaper.clone();
-        let slot = cx.look.slots.entry(format!("space-wall-{i}")).or_default();
-        let wall = ShaderSlot::get(slot, &program, t.to_i32_round(), a, vec![("dark", vec![cx.dark as u8 as f32])]);
-        out.push(DeskElement::Shader(wall));
+        space_thumbnail(desk, cx, i, t, a, out);
+        match (&desk.wallpaper, &cx.look.wallpaper_image) {
+            (Some(img), Some((generation, buf))) if *generation == img.generation => {
+                let screen = desk.output_geometry().to_f64();
+                let xf = Xf::fit(screen, t);
+                let at: Point<f64, Physical> = screen.loc.to_physical_precise_round::<f64, i32>(scale).to_f64();
+                if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(cx.renderer, at, buf, Some(a), None, None, Kind::Unspecified) {
+                    out.push(DeskElement::Text(xf.wrap(elem, scale)));
+                }
+            }
+            _ => {
+                let program = cx.look.shaders.wallpaper.clone();
+                let slot = cx.look.slots.entry(format!("space-wall-{i}")).or_default();
+                let wall = ShaderSlot::get(slot, &program, t.to_i32_round(), a, vec![("dark", vec![cx.dark as u8 as f32])]);
+                out.push(DeskElement::Shader(wall));
+            }
+        }
     }
     let add = Rectangle::<f64, Logical>::new((add.loc.x, add.loc.y + drop).into(), add.size);
     let (pw, ph) = cx.look.label("+", 22.0, Weight::MEDIUM, white, cx.int_scale).1;
     cx.text(out, "+", 22.0, Weight::MEDIUM, white, (add.loc.x + add.size.w / 2.0 - pw as f64 / 2.0, add.loc.y + add.size.h / 2.0 - ph as f64 / 2.0).into(), a);
     let plus = cx.look.rect("space-add", add.to_i32_round(), a, scale, 999.0, [1.0, 1.0, 1.0, 0.16], [1.0, 1.0, 1.0, 0.2], 0.5);
     out.push(DeskElement::Shader(plus));
+}
+
+/// A desktop's windows in miniature, inside its tile in the spaces bar,
+/// drawn from what each window last showed.
+fn space_thumbnail(desk: &Desk, cx: &mut Ctx, i: usize, tile: Rectangle<f64, Logical>, alpha: f32, out: &mut Vec<DeskElement>) {
+    let scale = cx.scale;
+    let windows: Vec<Window> = if i == desk.spaces.active {
+        desk.space.elements().cloned().collect()
+    } else {
+        desk.spaces.parked[i].iter().map(|(w, _)| w.clone()).collect()
+    };
+    let xf = Xf::fit(desk.output_geometry().to_f64(), tile);
+    // Topmost first, like everything in `out`.
+    for window in windows.iter().rev() {
+        let mut look = win_look(window).borrow_mut();
+        let look = &mut *look;
+        let Some(last) = look.last.as_ref() else { continue };
+        let r = (RADIUS as f64 * scale) as f32;
+        let own_shadow = last.geo.loc != Point::from((0, 0));
+        let geo_phys: Rectangle<i32, Physical> = Rectangle::new(last.loc, last.geo.size).to_physical_precise_round(scale);
+        for elem in &last.surfaces {
+            let id = look.thumb_ids.entry(elem.id().clone()).or_insert_with(Id::new).clone();
+            let program = (!own_shadow).then(|| cx.look.shaders.rounded.clone());
+            let radii = if last.ssd { [0.0, 0.0, r, r] } else { [r, r, r, r] };
+            let mut surface = WindowSurface::new(elem.clone(), program, scale, geo_phys, radii, alpha);
+            surface.id = Some(id);
+            out.push(DeskElement::Window(xf.wrap(surface, scale)));
+        }
+        if last.ssd {
+            // Our title bar, as a plain strip.
+            let bar = Rectangle::<i32, Logical>::new((last.loc.x, last.loc.y - TITLEBAR_H).into(), (last.geo.size.w, TITLEBAR_H).into());
+            let fill = if cx.dark { [0.200, 0.200, 0.208, 1.0] } else { [0.918, 0.918, 0.922, 1.0] };
+            let name = format!("thumb-bar-{:p}", window.user_data() as *const _);
+            let r = RADIUS * xf.scale as f32;
+            let strip = cx.look.rect(&name, xf.rect(bar), alpha, scale, r, fill, [0.0; 4], 0.0);
+            out.push(DeskElement::Shader(strip));
+        }
+    }
 }
 
 /// The Super+Tab switcher: app icons in a panel, the chosen one highlighted.
@@ -832,6 +885,9 @@ pub struct WindowSurface {
     program: Option<GlesTexProgram>,
     uniforms: Vec<Uniform<'static>>,
     alpha: f32,
+    /// Set when the same surface is drawn twice (a Mission Control
+    /// thumbnail), so the copies don't share an identity.
+    id: Option<Id>,
 }
 
 impl WindowSurface {
@@ -851,13 +907,13 @@ impl WindowSurface {
             Uniform::new("radii", (radii[0], radii[1], radii[2], radii[3])),
             Uniform::new("flip", 0.0f32),
         ];
-        WindowSurface { inner, program, uniforms, alpha }
+        WindowSurface { inner, program, uniforms, alpha, id: None }
     }
 }
 
 impl Element for WindowSurface {
     fn id(&self) -> &Id {
-        self.inner.id()
+        self.id.as_ref().unwrap_or(self.inner.id())
     }
     fn current_commit(&self) -> CommitCounter {
         self.inner.current_commit()

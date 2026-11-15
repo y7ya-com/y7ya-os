@@ -5,7 +5,7 @@
 use ui::*;
 
 use super::theme::Theme;
-use super::{Shell, icons, launch, shell_quote};
+use super::{Panel, Shell, icons, launch, shell_quote};
 use crate::calc::Answer;
 use crate::search::{self, Hit};
 
@@ -220,8 +220,16 @@ impl Shell {
             }
         };
         let big = matches!(hit, Hit::Answer(_));
-        div()
-            .id(("spotlight-row", i))
+        // In Start, apps found by search pin like listed ones.
+        let pin_menu = match hit {
+            Hit::App(app) if self.panel == Panel::Start => Some(app.id.clone()),
+            _ => None,
+        };
+        let mut row = div().id(("spotlight-row", i));
+        if let Some(id) = pin_menu {
+            row = row.on_right_click(move |s: &mut Self, cx: &mut Cx| s.start_menu = Some((id.clone(), cx.mouse)));
+        }
+        row
             .h(ROW_H)
             .px(10.0)
             .rounded(10.0)

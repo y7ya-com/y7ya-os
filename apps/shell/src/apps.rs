@@ -14,6 +14,9 @@ pub struct DesktopEntry {
     pub exec: String,
     pub icon: String,
     pub wm_class: String,
+    /// `NoDisplay=true`: launchable and found by search, but not listed in
+    /// All Apps (helpers, and apps like AppImages that hide themselves).
+    pub no_display: bool,
 }
 
 impl DesktopEntry {
@@ -34,19 +37,54 @@ impl DesktopEntry {
         out.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
+    /// The program `command` runs, as written (`/opt/x/bin/foo`, `foo`).
+    pub fn program(&self) -> String {
+        self.command().split_whitespace().next().unwrap_or("").to_string()
+    }
+
     /// Whether this entry is the app behind a window with `app_id`.
     pub fn matches_app_id(&self, app_id: &str) -> bool {
         let short = |s: &str| s.rsplit('.').next().unwrap_or(s).to_lowercase();
         let a = app_id.to_lowercase();
-        self.id.to_lowercase() == a
+        if self.id.to_lowercase() == a
             || self.wm_class.to_lowercase() == a
             || short(&self.id) == short(app_id)
             || self.name.to_lowercase() == a
+        {
+            return true;
+        }
+        // Looser, for entries that don't name their window class (Electron
+        // AppImages): "T3 Code (Beta)" or `T3-Code-0.1.7-x86_64.AppImage`
+        // for a window called `t3code`. Short ids are too easy to collide.
+        let a = squash(app_id);
+        a.len() >= 4 && (squash(self.name.split(" (").next().unwrap_or("")) == a || program_stem(&self.program()).is_some_and(|p| p == a))
     }
 }
 
+/// Lowercase letters and digits only: "T3 Code" → "t3code".
+fn squash(s: &str) -> String {
+    s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+}
+
+/// A program's name without its path, extension or trailing version
+/// (`/x/T3-Code-0.1.7-x86_64.AppImage` → "t3code"), squashed. `None` for
+/// launchers that run something else.
+fn program_stem(program: &str) -> Option<String> {
+    let file = program.rsplit('/').next().unwrap_or(program);
+    let file = file.strip_suffix(".AppImage").or_else(|| file.strip_suffix(".appimage")).unwrap_or(file);
+    const WRAPPERS: [&str; 10] = ["env", "sh", "bash", "flatpak", "snap", "python", "python3", "java", "xdg-open", "gtk-launch"];
+    if WRAPPERS.contains(&file) {
+        return None;
+    }
+    // Cut at a dash before a digit: "T3-Code-0.1.7-x86_64" → "T3-Code".
+    let bytes = file.as_bytes();
+    let end = (1..bytes.len()).find(|&i| bytes[i - 1] == b'-' && bytes[i].is_ascii_digit()).map_or(file.len(), |i| i - 1);
+    Some(squash(&file[..end]))
+}
+
 /// Parses the `[Desktop Entry]` group. Returns `None` for entries that aren't
-/// launchable apps or that ask to be hidden.
+/// launchable apps or that are deleted (`Hidden=true`) or meant for other
+/// desktops; `NoDisplay=true` ones come back marked `no_display`.
 pub fn parse(id: &str, text: &str) -> Option<DesktopEntry> {
     let mut e = DesktopEntry { id: id.to_string(), ..Default::default() };
     let mut in_group = false;
@@ -70,7 +108,8 @@ pub fn parse(id: &str, text: &str) -> Option<DesktopEntry> {
             "Exec" => e.exec = value.to_string(),
             "Icon" => e.icon = value.to_string(),
             "StartupWMClass" => e.wm_class = value.to_string(),
-            "NoDisplay" | "Hidden" if value == "true" => return None,
+            "Hidden" if value == "true" => return None,
+            "NoDisplay" => e.no_display = value == "true",
             "OnlyShowIn" => {
                 let ours = ["KDE", "y7ya-os"];
                 if !value.split(';').any(|d| ours.contains(&d)) {
@@ -139,7 +178,8 @@ fn scan(root: &Path, dir: &Path, seen: &mut HashSet<String>, out: &mut Vec<Deskt
 /// A display name for a window's app id: the matching app's name, or a
 /// tidied-up id ("org.kde.dolphin" → "Dolphin").
 pub fn display_name(apps: &[DesktopEntry], app_id: &str) -> String {
-    if let Some(e) = apps.iter().find(|e| e.matches_app_id(app_id)) {
+    let mut matching = apps.iter().filter(|e| e.matches_app_id(app_id));
+    if let Some(e) = matching.clone().find(|e| !e.no_display).or_else(|| matching.next()) {
         return e.name.clone();
     }
     let short = app_id.rsplit('.').next().unwrap_or(app_id);
@@ -148,13 +188,14 @@ pub fn display_name(apps: &[DesktopEntry], app_id: &str) -> String {
 }
 
 /// The Start menu's "All apps": apps alphabetically under letter headers,
-/// with names that don't start with a letter under "#" first.
+/// with names that don't start with a letter under "#" first. `NoDisplay`
+/// apps aren't listed.
 pub fn by_letter(apps: &[DesktopEntry]) -> Vec<(String, Vec<&DesktopEntry>)> {
     let header = |e: &DesktopEntry| match e.name.chars().find(|c| !c.is_whitespace()) {
         Some(c) if c.is_alphabetic() => c.to_uppercase().collect::<String>(),
         _ => "#".to_string(),
     };
-    let mut sorted: Vec<&DesktopEntry> = apps.iter().collect();
+    let mut sorted: Vec<&DesktopEntry> = apps.iter().filter(|e| !e.no_display).collect();
     sorted.sort_by_cached_key(|e| (header(e) != "#", header(e), e.name.to_lowercase()));
     let mut out: Vec<(String, Vec<&DesktopEntry>)> = Vec::new();
     for e in sorted {
@@ -210,7 +251,11 @@ mod tests {
         assert!(e.matches_app_id("konsole"));
         assert!(!e.matches_app_id("dolphin"));
 
-        let hidden = "[Desktop Entry]\nType=Application\nName=X\nExec=x\nNoDisplay=true\n";
+        // NoDisplay apps still parse (search finds them); Hidden ones are gone.
+        let no_display = "[Desktop Entry]\nType=Application\nName=X\nExec=x\nNoDisplay=true\n";
+        assert!(parse("x", no_display).unwrap().no_display);
+        assert!(!e.no_display);
+        let hidden = "[Desktop Entry]\nType=Application\nName=X\nExec=x\nHidden=true\n";
         assert_eq!(parse("x", hidden), None);
         let link = "[Desktop Entry]\nType=Link\nName=X\nURL=https://x\n";
         assert_eq!(parse("x", link), None);
@@ -218,6 +263,34 @@ mod tests {
         assert_eq!(parse("x", gnome_only), None);
         let e = parse("y", "[Desktop Entry]\nType=Application\nName=Y\nExec=env A=1 y --flag=%%x %f\n").unwrap();
         assert_eq!(e.command(), "env A=1 y --flag=%x");
+        assert_eq!(e.program(), "env");
+    }
+
+    /// T3 Code's own entry: hidden from menus, no StartupWMClass, an
+    /// AppImage with a version in its name. Its Electron window is `t3code`.
+    const T3: &str = "[Desktop Entry]\nType=Application\nName=T3 Code (Beta)\n\
+        Exec=/home/u/Downloads/T3-Code-0.1.7-x86_64.AppImage %U\nIcon=/home/u/.local/share/icons/t3.png\nNoDisplay=true\n";
+
+    #[test]
+    fn matches_unlabeled_windows() {
+        let t3 = parse("com.t3tools.T3Code", T3).unwrap();
+        assert!(t3.no_display);
+        assert_eq!(t3.program(), "/home/u/Downloads/T3-Code-0.1.7-x86_64.AppImage");
+        assert!(t3.matches_app_id("t3code"));
+        assert!(t3.matches_app_id("T3Code"));
+        // By the AppImage's name alone, and by the name alone.
+        let by_exec = DesktopEntry { id: "x".into(), name: "Something".into(), ..t3.clone() };
+        assert!(by_exec.matches_app_id("t3-code"));
+        let by_name = parse("y", "[Desktop Entry]\nType=Application\nName=Granola Notes (Beta)\nExec=/opt/g/run\n").unwrap();
+        assert!(by_name.matches_app_id("granolanotes"));
+        assert!(!by_name.matches_app_id("run"));
+        // Nothing loose for short ids, wrappers or other apps.
+        assert!(!t3.matches_app_id("t3"));
+        assert!(!t3.matches_app_id("code"));
+        let wrapped = parse("z", "[Desktop Entry]\nType=Application\nName=Zed\nExec=env A=1 zed\n").unwrap();
+        assert!(!wrapped.matches_app_id("env"));
+        assert_eq!(program_stem("/usr/bin/org.kde.dolphin"), Some("orgkdedolphin".into()));
+        assert_eq!(program_stem("flatpak"), None);
     }
 
     #[test]
@@ -232,12 +305,16 @@ mod tests {
         std::fs::write(system.join("zed.desktop"), entry("Zed")).unwrap();
         std::fs::write(user.join("sub/tool.desktop"), entry("Tool")).unwrap();
         std::fs::write(user.join("gone.desktop"), "[Desktop Entry]\nType=Application\nName=G\nExec=g\nHidden=true\n").unwrap();
+        std::fs::write(user.join("helper.desktop"), "[Desktop Entry]\nType=Application\nName=Helper\nExec=h\nNoDisplay=true\n").unwrap();
         std::fs::write(system.join("gone.desktop"), entry("Gone")).unwrap();
 
         let apps = load(&[user, system]);
         let names: Vec<&str> = apps.iter().map(|a| a.name.as_str()).collect();
-        assert_eq!(names, ["My Notes", "Tool", "Zed"]);
-        assert_eq!(apps[1].id, "sub-tool");
+        assert_eq!(names, ["Helper", "My Notes", "Tool", "Zed"]);
+        assert_eq!(apps[2].id, "sub-tool");
+        // All Apps leaves the NoDisplay one out.
+        let listed: Vec<&str> = by_letter(&apps).into_iter().flat_map(|(_, l)| l).map(|e| e.name.as_str()).collect();
+        assert_eq!(listed, ["My Notes", "Tool", "Zed"]);
         assert_eq!(display_name(&apps, "notes"), "My Notes");
         assert_eq!(display_name(&apps, "org.kde.dolphin"), "Dolphin");
         std::fs::remove_dir_all(base).unwrap();

@@ -319,6 +319,7 @@ impl Desk {
                 Some((window, Hit::Resize(edges))) => {
                     self.focus(Some(window.clone()));
                     self.set_named_cursor(edges.cursor());
+                    self.resizing = true;
                     if let Some(loc) = self.space.element_location(&window) {
                         let initial = Rectangle::new(loc, window.geometry().size);
                         let start_data = GrabStartData { focus: None, button, location: pos };

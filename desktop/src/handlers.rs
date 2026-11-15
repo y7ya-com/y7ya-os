@@ -106,10 +106,11 @@ impl SeatHandler for Desk {
         &mut self.seat_state
     }
 
-    fn cursor_image(&mut self, seat: &Seat<Self>, image: CursorImageStatus) {
+    fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
         // While we resize a window the pointer stays a resize arrow, whatever
         // the app under it asks for.
-        if seat.get_pointer().is_some_and(|p| p.is_grabbed()) && matches!(self.cursor_status, CursorImageStatus::Named(i) if i != smithay::input::pointer::CursorIcon::Default) {
+        // (Smithay calls this with the pointer locked: don't touch the seat.)
+        if self.resizing {
             return;
         }
         self.cursor_status = image;
@@ -208,6 +209,7 @@ impl XdgShellHandler for Desk {
         let initial = Rectangle::new(loc, window.geometry().size);
         let edges: grabs::Edges = edges.into();
         self.set_named_cursor(edges.cursor());
+        self.resizing = true;
         let pointer = seat.get_pointer().unwrap();
         pointer.set_grab(self, ResizeGrab::start(start_data, window, edges, initial), serial, Focus::Clear);
     }

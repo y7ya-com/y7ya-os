@@ -5054,6 +5054,7 @@ dependencies = [
  "chrono",
  "dirs",
  "resvg",
+ "serde_json",
  "ui",
  "wayland-client",
  "wayland-protocols-wlr",

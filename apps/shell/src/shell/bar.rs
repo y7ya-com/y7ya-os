@@ -1,11 +1,16 @@
-//! The taskbar (Windows 10's layout, macOS's materials), the overlay that
-//! holds whatever flyout is open, and the taskbar buttons' menu.
+//! The taskbar (KDE's layout: Start, the pager, one icon per app, the tray;
+//! macOS's materials), the overlay that holds whatever flyout is open, the
+//! taskbar buttons' menu and tooltip.
 
+use std::time::{Duration, Instant};
+
+use ui::layer::{Anchor, Layer, LayerOptions};
 use ui::*;
 
 use super::spotlight::letter_tile;
 use super::theme::Theme;
-use super::{BAR_H, MARGIN, Panel, SLIDE, Shell, icons};
+use super::{BAR_H, Hover, MARGIN, Panel, SLIDE, Shell, TOOLTIP, TOOLTIP_DELAY, icons};
+use crate::desktops::Spaces;
 use crate::taskbar::{self, GAP, ICON_W, Item};
 use crate::toplevel::WindowAction;
 
@@ -15,13 +20,21 @@ const PILL_Y: f32 = (BAR_H - PILL_H) / 2.0;
 const ICON: f32 = 24.0;
 /// The Show Desktop sliver at the far right.
 const SLIVER_W: f32 = 8.0;
-/// Below this a window button drops its title.
-const LABEL_MIN_W: f32 = 88.0;
+/// The pager's desktops are this tall, as wide as the screen's shape says.
+const SPACE_H: f32 = 28.0;
+/// Wheel travel that moves the pager one desktop (one notch).
+const SPACE_STEP: f32 = 48.0;
 const MENU_W: f32 = 212.0;
 const TRAY_SLOT: f32 = 28.0;
 
 const TIME: TextStyle = TextStyle { size: 12.0, line_height: 1.25, weight: Weight::Medium, color: Color::BLACK };
 const DATE: TextStyle = TextStyle { size: 11.0, line_height: 1.25, weight: Weight::Regular, color: Color::BLACK };
+const TIP: TextStyle = TextStyle { size: 12.0, line_height: 1.25, weight: Weight::Regular, color: Color::BLACK };
+/// The tooltip's text is padded this much, and its surface this much more
+/// for the shadow.
+const TIP_PAD: f32 = 8.0;
+const TIP_SHADOW: f32 = 6.0;
+const TIP_MAX_W: f32 = 360.0;
 
 /// "7:52 PM" over "11/14/2026".
 pub fn clock_lines(now: &chrono::DateTime<chrono::Local>) -> (String, String) {
@@ -32,13 +45,14 @@ pub fn clock_lines(now: &chrono::DateTime<chrono::Local>) -> (String, String) {
 enum MenuAction {
     New,
     TogglePin,
+    /// Every window of the button's app.
     Close,
 }
 
 impl Shell {
     /// A pill-shaped taskbar button: `on` is its open/active look.
-    fn bar_button(&self, id: impl std::hash::Hash + Copy, w: f32, on: bool, cx: &Cx, t: &Theme) -> Div<Self> {
-        let pressed = cx.mouse_down && cx.hovered(id);
+    fn bar_button(&self, id: impl std::hash::Hash + Clone, w: f32, on: bool, cx: &Cx, t: &Theme) -> Div<Self> {
+        let pressed = cx.mouse_down && cx.hovered(id.clone());
         let bg = match (on, pressed) {
             (_, true) => t.bar_press,
             (true, false) => t.bar_active,
@@ -71,11 +85,8 @@ impl Shell {
         let (w, _) = cx.window_size;
         let open = self.panel;
 
-        // Left: Start, search, then the app buttons from `taskbar::layout`.
+        // Left: Start, the pager, then the app buttons from `taskbar::layout`.
         let start_x = 4.0;
-        let search_x = start_x + ICON_W + GAP;
-        let items_x = search_x + ICON_W + 12.0;
-
         let start_on = open == Panel::Start;
         let tile = if start_on || cx.hovered("tb-start") { t.accent } else { t.label };
         let hole = if t.dark { rgb(0x1e1e20) } else { rgb(0xf2f2f4) };
@@ -84,27 +95,34 @@ impl Shell {
             .absolute(start_x, PILL_Y)
             .on_mouse_down(|s: &mut Self, cx: &mut Cx| s.open(Panel::Start, cx))
             .child(canvas(move |s, b| icons::start_mark(s, b, tile, hole)).size(20.0));
-        let ink = t.label;
-        let search = self
-            .bar_button("tb-search", ICON_W, open == Panel::Spotlight, cx, t)
-            .absolute(search_x, PILL_Y)
-            .on_mouse_down(|s: &mut Self, cx: &mut Cx| s.open(Panel::Spotlight, cx))
-            .child(canvas(move |s, b| icons::magnifier(s, b, ink, 15.0)).size(20.0));
+
+        let pager_x = start_x + ICON_W + 8.0;
+        let pager = self.desktops.state().map(|st| self.pager(&st, pager_x, cx, t));
+        self.pager_span = pager.as_ref().map(|(_, pw)| (pager_x, pager_x + pw));
+        let items_x = match &pager {
+            Some((_, pw)) => pager_x + pw + 8.0,
+            None => start_x + ICON_W + 12.0,
+        };
 
         let right = self.tray_and_clock(cx, t);
         let right_w = self.right_width(cx);
         let items = self.items();
-        let slots = taskbar::layout(&items, items_x, (w - right_w - 12.0 - items_x).max(0.0));
+        let slots = taskbar::layout(items.len(), items_x, (w - right_w - 12.0 - items_x).max(0.0));
         let active = self.active_window();
         let mut rects = Vec::new();
         let mut buttons = Vec::new();
-        for (i, (item, (x, bw))) in items.iter().zip(slots).enumerate() {
-            if let Item::Window { id, .. } = item {
-                rects.push((*id, [x as i32, PILL_Y as i32, bw as i32, PILL_H as i32]));
+        let mut hovered = None;
+        for (item, (x, bw)) in items.iter().zip(slots) {
+            // Every window of an app minimizes into its button.
+            rects.extend(item.windows.iter().map(|id| (*id, [x as i32, PILL_Y as i32, bw as i32, PILL_H as i32])));
+            if cx.hovered(("tb-app", item.key())) {
+                hovered = Some((item.key(), self.item_label(item), x + bw / 2.0));
             }
-            buttons.push(self.item_button(i, item, x, bw, active, cx, t));
+            buttons.push(self.item_button(item, x, bw, active, cx, t));
         }
         self.send_rects(rects, cx);
+        self.set_hover(hovered, w);
+        self.sync_layers(cx);
 
         div()
             .w_full()
@@ -112,75 +130,210 @@ impl Shell {
             .bg(t.bar)
             .child(div().absolute(0.0, 0.0).w(w).h(1.0 / cx.scale.max(1.0)).bg(t.bar_edge))
             .child(start)
-            .child(search)
+            .children(pager.map(|(p, _)| p))
             .children(buttons)
             .child(right.absolute(w - right_w, 0.0))
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn item_button(&self, i: usize, item: &Item, x: f32, w: f32, active: Option<u64>, cx: &Cx, t: &Theme) -> Div<Self> {
-        let id = ("tb-item", i);
-        match item {
-            Item::Pinned { app } => {
-                let name = self.app(app).map(|e| e.name.clone()).unwrap_or_default();
-                let (a, b) = (app.clone(), app.clone());
-                self.bar_button(id, w, false, cx, t)
-                    .absolute(x, PILL_Y)
-                    .on_click(move |s: &mut Self, cx: &mut Cx| s.launch_app(&a, cx))
-                    .on_middle_click(move |s: &mut Self, cx: &mut Cx| s.launch_app(&b, cx))
-                    .on_right_click({
-                        let item = item.clone();
-                        move |s: &mut Self, cx: &mut Cx| s.open_task_menu(item.clone(), x, cx)
-                    })
-                    .child(self.app_icon(Some(app), "", &name, ICON))
+    // -- the pager --------------------------------------------------------------
+
+    /// One small screen per desktop with its windows outlined, the current
+    /// one marked; returns it and its width.
+    fn pager(&self, st: &Spaces, x: f32, cx: &Cx, t: &Theme) -> (Div<Self>, f32) {
+        let (sw, sh) = (st.screen.0.max(1.0), st.screen.1.max(1.0));
+        let cell_w = (SPACE_H * sw / sh).round().clamp(SPACE_H, SPACE_H * 3.0);
+        let (kx, ky) = (cell_w / sw, SPACE_H / sh);
+        let hair = 1.0 / cx.scale.max(1.0);
+        let (win_fill, win_edge) = if t.dark { (rgb(0x4a4a4e), rgba(0xffffff, 0.45)) } else { (rgb(0xffffff), rgba(0x000000, 0.35)) };
+        let mut pager = div().absolute(x, (BAR_H - SPACE_H) / 2.0).h(SPACE_H).flex_row().gap(GAP);
+        for (i, space) in st.spaces.iter().enumerate() {
+            let on = i == st.active;
+            let id = ("tb-space", i);
+            let mut cell = div()
+                .id(id)
+                .w(cell_w)
+                .h(SPACE_H)
+                .rounded(5.0)
+                .clip()
+                .bg(if on { t.accent.alpha(if t.dark { 0.28 } else { 0.16 }) } else { t.fill })
+                .hover_bg(if on { t.accent.alpha(if t.dark { 0.34 } else { 0.22 }) } else { t.bar_hover.alpha(2.0) })
+                .on_click(move |s: &mut Self, cx: &mut Cx| {
+                    s.close(cx);
+                    s.desktops.switch(i);
+                });
+            for w in space.windows.iter().filter(|w| !w.minimized) {
+                let [wx, wy, ww, wh] = w.rect;
+                cell = cell.child(
+                    div()
+                        .absolute((wx * kx).round(), (wy * ky).round())
+                        .w((ww * kx).round().max(3.0))
+                        .h((wh * ky).round().max(3.0))
+                        .rounded(1.5)
+                        .bg(win_fill)
+                        .border(if on { t.accent.alpha(0.8) } else { win_edge }, hair.max(0.75)),
+                );
             }
-            Item::Window { id: win, app } => {
-                let Some(window) = self.window(*win) else { return div() };
-                let is_active = active == Some(*win);
-                let name = app.as_deref().and_then(|a| self.app(a)).map(|e| e.name.clone());
-                let name = name.unwrap_or_else(|| crate::apps::display_name(&self.apps, &window.app_id));
-                let title = if window.title.is_empty() { name.clone() } else { window.title.clone() };
-                let icon = self.app_icon(app.as_deref(), &window.app_id, &name, ICON);
-                let labeled = w >= LABEL_MIN_W;
-                let mut content = div().flex_row().items_center().gap(8.0).h(PILL_H);
-                content = if labeled {
-                    content.w(w).px(8.0).child(icon).child(text(title).size(12.5).truncate().flex_1().min_w_0())
-                } else {
-                    content.justify_center().w(w).child(icon)
-                };
-                if window.minimized {
-                    content = content.opacity(0.5);
-                }
-                // The underline: accent and long for the active window, a
-                // short quiet dash for the others.
-                let (line_w, line_c) = if is_active {
-                    (if labeled { w - 24.0 } else { 16.0 }, t.accent)
-                } else {
-                    (8.0, t.bar_running)
-                };
-                let underline = div()
-                    .absolute((w - line_w) / 2.0, PILL_H - 4.0)
-                    .w(line_w)
-                    .h(2.5)
-                    .rounded(1.25)
-                    .bg(if window.minimized { line_c.alpha(0.6) } else { line_c });
-                let (win, new_app) = (*win, app.clone());
-                self.bar_button(id, w, is_active, cx, t)
-                    .absolute(x, PILL_Y)
-                    .on_click(move |s: &mut Self, cx: &mut Cx| s.window_clicked(win, cx))
-                    .on_middle_click(move |s: &mut Self, cx: &mut Cx| {
-                        if let Some(a) = &new_app {
-                            s.launch_app(a, cx);
-                        }
-                    })
-                    .on_right_click({
-                        let item = item.clone();
-                        move |s: &mut Self, cx: &mut Cx| s.open_task_menu(item.clone(), x, cx)
-                    })
-                    .child(content)
-                    .child(underline)
+            // The border goes over the windows: a last child the cell's size.
+            let edge = if on { (t.accent, 1.5) } else { (t.separator.alpha(1.5), hair.max(0.75)) };
+            cell = cell.child(div().absolute(0.0, 0.0).w(cell_w).h(SPACE_H).rounded(5.0).border(edge.0, edge.1));
+            pager = pager.child(cell);
+        }
+        let n = st.spaces.len() as f32;
+        (pager, n * cell_w + (n - 1.0).max(0.0) * GAP)
+    }
+
+    /// The wheel over the pager steps through desktops (up: the previous
+    /// one). Returns false when the pointer isn't over it.
+    pub(super) fn pager_scrolled(&mut self, dy: f32, cx: &mut Cx) -> bool {
+        let Some((x0, x1)) = self.pager_span else { return false };
+        if cx.mouse.x < x0 || cx.mouse.x > x1 {
+            return false;
+        }
+        let Some(st) = self.desktops.state() else { return false };
+        if self.pager_scroll * dy < 0.0 {
+            self.pager_scroll = 0.0;
+        }
+        self.pager_scroll += dy;
+        if self.pager_scroll.abs() >= SPACE_STEP {
+            let back = self.pager_scroll > 0.0;
+            self.pager_scroll = 0.0;
+            let n = if back { st.active.checked_sub(1) } else { Some(st.active + 1).filter(|n| *n < st.spaces.len()) };
+            if let Some(n) = n {
+                self.desktops.switch(n);
             }
         }
+        true
+    }
+
+    // -- app buttons ------------------------------------------------------------
+
+    /// An app's name, or the window's title if it has just the one.
+    fn item_label(&self, item: &Item) -> String {
+        let name = match item.app().and_then(|a| self.app(a)) {
+            Some(e) => e.name.clone(),
+            None => crate::apps::display_name(&self.apps, &item.app_id),
+        };
+        match item.windows.as_slice() {
+            [one] => self.window(*one).map(|w| w.title.clone()).filter(|t| !t.is_empty()).unwrap_or(name),
+            [] => name,
+            more => format!("{name} \u{2014} {} windows", more.len()),
+        }
+    }
+
+    fn item_button(&self, item: &Item, x: f32, w: f32, active: Option<u64>, cx: &Cx, t: &Theme) -> Div<Self> {
+        let id = ("tb-app", item.key());
+        let name = match item.app().and_then(|a| self.app(a)) {
+            Some(e) => e.name.clone(),
+            None => crate::apps::display_name(&self.apps, &item.app_id),
+        };
+        let windows: Vec<_> = item.windows.iter().filter_map(|id| self.window(*id)).collect();
+        let is_active = active.is_some_and(|a| item.windows.contains(&a));
+        let all_minimized = !windows.is_empty() && windows.iter().all(|w| w.minimized);
+        let icon_size = ICON.min(w - 8.0);
+        let mut icon = div().size(icon_size).child(self.app_icon(item.app(), &item.app_id, &name, icon_size));
+        if all_minimized {
+            icon = icon.opacity(0.5);
+        }
+        let mut button = self
+            .bar_button(id, w, is_active, cx, t)
+            .absolute(x, PILL_Y)
+            .on_click({
+                let item = item.clone();
+                move |s: &mut Self, cx: &mut Cx| s.item_clicked(&item, cx)
+            })
+            .on_middle_click({
+                let app = item.app.clone();
+                move |s: &mut Self, cx: &mut Cx| {
+                    if let Some(a) = &app {
+                        s.launch_app(a, cx);
+                    }
+                }
+            })
+            .on_right_click({
+                let item = item.clone();
+                move |s: &mut Self, cx: &mut Cx| s.open_task_menu(item.clone(), x, cx)
+            })
+            .child(icon);
+        // Running: a short dash under the icon (two for several windows),
+        // longer and accent for the active app.
+        if !windows.is_empty() {
+            let (seg, color) = match (is_active, windows.len() > 1) {
+                (true, false) => (16.0, t.accent),
+                (true, true) => (7.0, t.accent),
+                (false, false) => (6.0, t.bar_running),
+                (false, true) => (4.0, t.bar_running),
+            };
+            let color = if all_minimized { color.alpha(0.6) } else { color };
+            let count = windows.len().min(2) as f32;
+            let total = seg * count + 2.5 * (count - 1.0);
+            for k in 0..count as usize {
+                button = button.child(
+                    div()
+                        .absolute(((w - total) / 2.0 + k as f32 * (seg + 2.5)).round(), PILL_H - 4.0)
+                        .w(seg)
+                        .h(2.5)
+                        .rounded(1.25)
+                        .bg(color),
+                );
+            }
+        }
+        button
+    }
+
+    // -- the tooltip ------------------------------------------------------------
+
+    /// Notes which app button the pointer is on. Once one tooltip is up,
+    /// moving to the next button shows its tooltip right away.
+    fn set_hover(&mut self, hovered: Option<(String, String, f32)>, bar_w: f32) {
+        let Some((key, label, x)) = hovered else {
+            self.hover = None;
+            return;
+        };
+        let x = x.clamp(0.0, bar_w);
+        if let Some(h) = self.hover.as_mut().filter(|h| h.key == key) {
+            (h.label, h.x, h.bar_w) = (label, x, bar_w);
+            return;
+        }
+        let since = if self.shown_tooltip.is_some() {
+            Instant::now().checked_sub(TOOLTIP_DELAY).unwrap_or_else(Instant::now)
+        } else {
+            Instant::now()
+        };
+        self.hover = Some(Hover { key, label, x, bar_w, since });
+    }
+
+    /// Where the tooltip surface goes, if one is due.
+    pub(super) fn tooltip_options(&self, cx: &mut Cx) -> Option<LayerOptions> {
+        let h = self.hover.as_ref().filter(|h| h.since.elapsed() >= TOOLTIP_DELAY - Duration::from_millis(5))?;
+        if self.drawn != Panel::None {
+            return None;
+        }
+        let tw = cx.text.measure(&h.label, &TIP, None, false).0;
+        let w = (tw.min(TIP_MAX_W) + 2.0 * TIP_PAD + 2.0 * TIP_SHADOW).ceil();
+        let left = (h.x - w / 2.0).clamp(0.0, (h.bar_w - w).max(0.0));
+        Some(LayerOptions {
+            layer: Layer::Overlay,
+            anchor: Anchor::BOTTOM | Anchor::LEFT,
+            size: (w as u32, (24.0 + 2.0 * TIP_SHADOW) as u32),
+            namespace: TOOLTIP.into(),
+            margin: (0, 0, 0, left.round() as i32),
+            ..Default::default()
+        })
+    }
+
+    pub(super) fn tooltip(&self, t: &Theme) -> Div<Self> {
+        let Some(h) = &self.hover else { return div() };
+        div().p(TIP_SHADOW).child(
+            div()
+                .h(24.0)
+                .px(TIP_PAD)
+                .items_center()
+                .rounded(6.0)
+                .bg(t.menu)
+                .border(t.border, 0.5)
+                .shadow(t.shadow.alpha(0.5), 6.0, 1.0)
+                .child(text(h.label.clone()).size(TIP.size).line_height(TIP.line_height).truncate().max_w(TIP_MAX_W)),
+        )
     }
 
     /// The tray icons that are showing, for sizing.
@@ -337,14 +490,15 @@ impl Shell {
         let pinned = item.app().is_some_and(|a| self.pins.contains(a));
         let mut rows: Vec<Option<(String, MenuAction)>> = Vec::new();
         if let Some(e) = app {
-            rows.push(Some((if matches!(item, Item::Pinned { .. }) { format!("Open {}", e.name) } else { "New Window".into() }, MenuAction::New)));
+            rows.push(Some((if item.windows.is_empty() { format!("Open {}", e.name) } else { "New Window".into() }, MenuAction::New)));
             rows.push(Some((if pinned { "Unpin from Taskbar" } else { "Pin to Taskbar" }.into(), MenuAction::TogglePin)));
         }
-        if matches!(item, Item::Window { .. }) {
+        if !item.windows.is_empty() {
             if !rows.is_empty() {
                 rows.push(None);
             }
-            rows.push(Some(("Close Window".into(), MenuAction::Close)));
+            let label = if item.windows.len() > 1 { "Close All Windows" } else { "Close Window" };
+            rows.push(Some((label.into(), MenuAction::Close)));
         }
         let mut menu = div()
             .w(MENU_W)
@@ -393,7 +547,7 @@ impl Shell {
             }
             MenuAction::Close => {
                 self.close(cx);
-                if let Item::Window { id, .. } = item {
+                for id in item.windows {
                     self.act(id, WindowAction::Close);
                 }
             }

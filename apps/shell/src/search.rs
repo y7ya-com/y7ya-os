@@ -44,7 +44,7 @@ pub fn app_score(app: &DesktopEntry, q: &str) -> Option<i32> {
     if name.contains(q) {
         return Some(600);
     }
-    let program = app.command().split_whitespace().next().unwrap_or("").rsplit('/').next().unwrap_or("").to_lowercase();
+    let program = app.program().rsplit('/').next().unwrap_or("").to_lowercase();
     if program.starts_with(q) {
         return Some(550);
     }
@@ -55,6 +55,10 @@ pub fn app_score(app: &DesktopEntry, q: &str) -> Option<i32> {
         .any(|w| w.to_lowercase().starts_with(q));
     if extra_word {
         return Some(500);
+    }
+    // Hidden helpers only turn up for real matches, not scattered letters.
+    if app.no_display {
+        return None;
     }
     // Letters in order with gaps ("ffx" → Firefox), short gaps first.
     let mut gaps = 0;
@@ -83,8 +87,21 @@ pub fn search(query: &str, apps: &[DesktopEntry], files: Option<&FileIndex>) -> 
     let mut sections = Vec::new();
     let answer = calc::answer(query);
 
-    let mut ranked: Vec<(i32, &DesktopEntry)> = apps.iter().filter_map(|a| Some((app_score(a, &q)?, a))).collect();
-    ranked.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.name.len().cmp(&b.1.name.len())).then(a.1.name.cmp(&b.1.name)));
+    // NoDisplay apps are found too (some apps hide themselves from menus),
+    // after listed ones that match as well, and not when a listed app has
+    // the same name (the alternate entries apps ship for URL handlers).
+    let listed = |name: &str| apps.iter().any(|a| !a.no_display && a.name.eq_ignore_ascii_case(name));
+    let mut ranked: Vec<(i32, &DesktopEntry)> = apps
+        .iter()
+        .filter(|a| !a.no_display || !listed(&a.name))
+        .filter_map(|a| Some((app_score(a, &q)?, a)))
+        .collect();
+    ranked.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then(a.1.no_display.cmp(&b.1.no_display))
+            .then(a.1.name.len().cmp(&b.1.name.len()))
+            .then(a.1.name.cmp(&b.1.name))
+    });
     ranked.truncate(MAX_APPS);
     // An app whose name starts with the query is the Top Hit, unless it's math.
     if let Some(&(_, app)) = ranked.first().filter(|(s, _)| *s >= 850 && answer.is_none()) {
@@ -174,6 +191,26 @@ mod tests {
         assert_eq!(top("ffx").as_deref(), Some("Firefox"));
         assert!(search("zzzz", &apps, None).is_empty());
         assert!(search("  ", &apps, None).is_empty());
+    }
+
+    #[test]
+    fn finds_no_display_apps() {
+        let mut apps = apps();
+        let hidden = |name: &str, exec: &str| DesktopEntry { no_display: true, ..app(name, exec, "", &[]) };
+        apps.push(hidden("T3 Code (Beta)", "/home/u/Downloads/T3-Code-0.1.7-x86_64.AppImage %U"));
+        apps.push(hidden("Konsole", "konsole --url"));
+        apps.push(hidden("Konsolidator", "konsolidator"));
+        apps.push(hidden("Fxx Helper", "fxx"));
+        let r = names(&search("t3", &apps, None));
+        assert_eq!(r, vec![("Top Hit".to_string(), vec!["T3 Code (Beta)".to_string()])]);
+        assert_eq!(names(&search("t3 code", &apps, None))[0].1, ["T3 Code (Beta)"]);
+        // Behind a listed app that matches as well; a hidden twin of a listed
+        // app doesn't show at all.
+        let r = names(&search("kons", &apps, None));
+        assert_eq!(r[0], ("Top Hit".into(), vec!["Konsole".into()]));
+        assert_eq!(r[1], ("Applications".into(), vec!["Konsolidator".into()]));
+        // No scattered-letter matches for hidden ones.
+        assert!(!names(&search("fxr", &apps, None)).iter().any(|(_, h)| h.contains(&"Fxx Helper".to_string())));
     }
 
     #[test]

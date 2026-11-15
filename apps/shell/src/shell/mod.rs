@@ -5,6 +5,8 @@
 //!   (Start, Quick Settings, the calendar, a button's menu), Spotlight or a
 //!   dialog is up. Clicking its empty area closes it, and it holds the keyboard.
 //! - `y7-banners`: notification banners at the bottom right, sized to the stack.
+//! - `y7-tooltip`: the name of the taskbar button under the pointer, just
+//!   above it, after a moment's hover.
 //!
 //! Flyouts slide and fade in and out; the animation runs on `next_wake`
 //! ticks only while it's moving.
@@ -31,18 +33,20 @@ use ui::*;
 
 use crate::app_icons::IconCache;
 use crate::apps::{self, DesktopEntry};
+use crate::desktops::Desktops;
 use crate::files::FileIndex;
 use crate::ipc::Command;
 use crate::notify::{self, Store};
 use crate::search::Section;
 use crate::system::{Request, Services, SessionAction, Status, System};
-use crate::taskbar::{self, DesktopAction, Item, Pins, ShowDesktop};
+use crate::taskbar::{self, Click, DesktopAction, Item, Pins, ShowDesktop};
 use crate::toplevel::{Toplevels, Window, WindowAction};
 use theme::Theme;
 
 pub const BAR: &str = "y7-taskbar";
 pub const PANEL: &str = "y7-panel";
 pub const BANNERS: &str = "y7-banners";
+pub const TOOLTIP: &str = "y7-tooltip";
 pub const BAR_H: f32 = 44.0;
 
 /// Flyouts float this far from the taskbar and screen edges.
@@ -52,6 +56,8 @@ const SLIDE: f32 = 8.0;
 const OPEN: Duration = Duration::from_millis(180);
 const CLOSE: Duration = Duration::from_millis(140);
 const FRAME: Duration = Duration::from_millis(16);
+/// How long the pointer rests on a taskbar button before its name shows.
+const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
 
 pub type Wake = Arc<dyn Fn() + Send + Sync>;
 
@@ -109,6 +115,14 @@ pub struct Shell {
     pub windows: Vec<Window>,
     /// The window that was active before a flyout took the keyboard.
     last_active: Option<u64>,
+    /// Windows from least to most recently active, for cycling a group.
+    recent: Vec<u64>,
+    /// The virtual desktops, for the pager.
+    pub desktops: Desktops,
+    /// Where the pager is on the taskbar (left and right x), if shown.
+    pager_span: Option<(f32, f32)>,
+    /// Wheel travel over the pager not yet turned into a switch.
+    pager_scroll: f32,
     apps: Vec<DesktopEntry>,
     icons: IconCache,
     pins: Pins,
@@ -138,6 +152,8 @@ pub struct Shell {
     dragging: Option<Slider>,
     /// The taskbar button whose menu is open, and the button's x.
     task_menu: Option<(Item, f32)>,
+    /// The taskbar button under the pointer and since when.
+    hover: Option<Hover>,
     /// An app's right-click menu in Start, and where it was opened.
     start_menu: Option<(String, Point)>,
     /// Months away from this one in the calendar flyout.
@@ -147,7 +163,19 @@ pub struct Shell {
     shown_panel: bool,
     shown_banners: Option<(u32, u32)>,
     sent_rects: HashMap<u64, [i32; 4]>,
+    shown_tooltip: Option<LayerOptions>,
     dnd_file: Option<PathBuf>,
+}
+
+/// A hovered taskbar button, for its tooltip.
+#[derive(Clone, Debug, PartialEq)]
+struct Hover {
+    key: String,
+    label: String,
+    /// The button's center, in taskbar coordinates, and the taskbar's width.
+    x: f32,
+    bar_w: f32,
+    since: Instant,
 }
 
 impl Shell {
@@ -161,8 +189,9 @@ impl Shell {
         store.dnd = dnd_file.as_ref().is_some_and(|f| f.exists());
         let store = Arc::new(Mutex::new(store));
         let inbox: Arc<Mutex<Vec<Command>>> = Arc::default();
-        let (mut toplevels, mut server) = (None, None);
+        let (mut toplevels, mut server, mut desktops) = (None, None, Desktops::default());
         if cfg.services {
+            desktops = Desktops::start(crate::desktops::socket_path(), wake.clone());
             toplevels = cx.wayland_connection().and_then(Toplevels::start);
             if let Some(t) = toplevels.clone() {
                 cx.poll_after_events(move || t.dispatch());
@@ -181,15 +210,27 @@ impl Shell {
         }
 
         let query = TextInput::new(&mut cx.text.fonts, TextStyle::default(), true);
+        let apps = apps::load(&apps::dirs());
+        // Until the user pins things here, what's pinned in KDE's panel.
+        let pins_file = data_dir.as_ref().map(|d| d.join("taskbar-pins"));
+        let kde = (data_dir.is_some() && !Pins::saved(pins_file.as_deref())).then(|| taskbar::kde_pins(&apps)).flatten();
+        let pins = match kde {
+            Some(ids) => Pins::load(pins_file, &ids),
+            None => Pins::load(pins_file, &Pins::TASKBAR),
+        };
         let shell = Shell {
             services,
             status: Status::default(),
             toplevels,
             windows: Vec::new(),
             last_active: None,
-            apps: apps::load(&apps::dirs()),
+            recent: Vec::new(),
+            desktops,
+            pager_span: None,
+            pager_scroll: 0.0,
+            apps,
             icons: IconCache::new(wake.clone()),
-            pins: Pins::load(data_dir.as_ref().map(|d| d.join("taskbar-pins")), &Pins::TASKBAR),
+            pins,
             start_pins: Pins::load(data_dir.as_ref().map(|d| d.join("start-pins")), &Pins::START),
             show_desktop: ShowDesktop::default(),
             files: Arc::default(),
@@ -209,12 +250,14 @@ impl Shell {
             sliders: Default::default(),
             dragging: None,
             task_menu: None,
+            hover: None,
             start_menu: None,
             month_offset: 0,
             user: dialogs::current_user(),
             shown_panel: false,
             shown_banners: None,
             sent_rects: HashMap::new(),
+            shown_tooltip: None,
             dnd_file,
         };
         shell.index_files();
@@ -309,7 +352,24 @@ impl Shell {
         self.close(cx);
     }
 
-    /// A window button was clicked: like Windows, the active window
+    /// An app's button was clicked: launch it, toggle its one window, or
+    /// cycle through its windows.
+    fn item_clicked(&mut self, item: &Item, cx: &mut Cx) {
+        match taskbar::click(&item.windows, self.active_window(), &self.recent) {
+            Click::Launch => {
+                if let Some(a) = item.app() {
+                    self.launch_app(&a.to_string(), cx);
+                }
+            }
+            Click::Toggle(id) => self.window_clicked(id, cx),
+            Click::Activate(id) => {
+                self.close(cx);
+                self.act(id, WindowAction::Activate);
+            }
+        }
+    }
+
+    /// A window's button was clicked: like Windows, the active window
     /// minimizes, any other comes forward.
     fn window_clicked(&mut self, id: u64, cx: &mut Cx) {
         let Some(w) = self.window(id).cloned() else { return };
@@ -347,6 +407,7 @@ impl Shell {
         if self.panel == panel {
             return self.close(cx);
         }
+        self.hover = None;
         self.panel = panel;
         self.drawn = panel;
         self.anim = Some((Instant::now(), false));
@@ -436,6 +497,15 @@ impl Shell {
             cx.hide_layer(PANEL);
         }
         self.shown_panel = want_panel;
+
+        let tooltip = self.tooltip_options(cx);
+        if tooltip != self.shown_tooltip || (tooltip.is_some() && !cx.layer_shown(TOOLTIP)) {
+            match &tooltip {
+                Some(opts) => cx.show_layer(opts.clone()),
+                None => cx.hide_layer(TOOLTIP),
+            }
+            self.shown_tooltip = tooltip;
+        }
 
         let banners = if self.drawn == Panel::Calendar { None } else { self.banner_size(cx) };
         let stale = banners != self.shown_banners || (banners.is_some() && !cx.layer_shown(BANNERS));
@@ -550,6 +620,7 @@ impl App for Shell {
                 self.panel_view(cx, &t)
             }
             BANNERS => self.banners(cx, &t),
+            TOOLTIP => self.tooltip(&t),
             _ => div(),
         }
     }
@@ -595,6 +666,10 @@ impl App for Shell {
         }
     }
 
+    fn on_scroll(&mut self, delta: Point, cx: &mut Cx) -> bool {
+        cx.layer() == BAR && self.pager_scrolled(delta.y, cx)
+    }
+
     fn next_wake(&self) -> Option<Instant> {
         // The clock: once a minute, on the minute.
         let secs = chrono::Local::now().timestamp();
@@ -604,6 +679,9 @@ impl App for Shell {
         }
         if self.anim.is_some() {
             next = next.min(Instant::now() + FRAME);
+        }
+        if let Some(h) = self.hover.as_ref().filter(|h| h.since.elapsed() < TOOLTIP_DELAY) {
+            next = next.min(h.since + TOOLTIP_DELAY);
         }
         Some(next)
     }
@@ -622,7 +700,14 @@ impl App for Shell {
             self.windows = t.windows();
             if let Some(w) = self.windows.iter().find(|w| w.activated) {
                 self.last_active = Some(w.id);
+                if self.recent.last() != Some(&w.id) {
+                    let id = w.id;
+                    self.recent.retain(|r| *r != id);
+                    self.recent.push(id);
+                }
             }
+            let windows = &self.windows;
+            self.recent.retain(|r| windows.iter().any(|w| w.id == *r));
         }
         let commands = std::mem::take(&mut *self.inbox.lock().unwrap());
         for cmd in commands {

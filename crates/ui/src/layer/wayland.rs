@@ -574,6 +574,10 @@ impl<A: App> Runner<A> {
     }
 
     fn scroll(&mut self, i: usize, dy: f32) {
+        if self.app.as_mut().is_some_and(|app| app.on_scroll(Point { x: 0.0, y: dy }, &mut self.cx)) {
+            self.surfaces[i].dirty = true;
+            return;
+        }
         let p = self.cx.mouse;
         let scrolls = &self.surfaces[i].frame.scrolls;
         let top = scrolls.iter().filter(|s| s.bounds.contains(p)).map(|s| s.layer).max();

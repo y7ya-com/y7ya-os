@@ -209,6 +209,7 @@ impl PointerGrab<Desk> for ResizeGrab {
     fn button(&mut self, data: &mut Desk, handle: &mut PointerInnerHandle<'_, Desk>, event: &ButtonEvent) {
         handle.button(data, event);
         if !handle.current_pressed().contains(&BTN_LEFT) {
+            data.resizing = false;
             handle.unset_grab(self, data, event.serial, event.time, true);
             let toplevel = self.window.toplevel().unwrap();
             toplevel.with_pending_state(|s| {

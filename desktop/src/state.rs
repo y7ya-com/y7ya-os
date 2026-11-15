@@ -152,6 +152,8 @@ pub struct Desk {
     pub cursor_status: smithay::input::pointer::CursorImageStatus,
     /// Whether we draw the pointer ourselves (true in the real session).
     pub draws_cursor: bool,
+    /// A window is being resized: the pointer stays a resize arrow.
+    pub resizing: bool,
     /// Switches virtual terminals (only in the real session).
     pub vt_switch: Option<Box<dyn FnMut(i32)>>,
     pub settings_watcher: Option<settings::Watcher>,
@@ -255,6 +257,7 @@ impl Desk {
             x_display: None,
             cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
             draws_cursor: false,
+            resizing: false,
             vt_switch: None,
             settings_watcher: None,
             nested: false,

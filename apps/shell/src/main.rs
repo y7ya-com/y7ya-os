@@ -11,6 +11,7 @@
 mod app_icons;
 mod apps;
 mod calc;
+mod desktops;
 mod files;
 mod ipc;
 mod notify;
@@ -95,6 +96,7 @@ fn snapshots(dir: &std::path::Path, dark: bool) {
         s.wait_for_status();
         demo_notifications(&s);
         s.windows = demo_windows();
+        s.desktops = desktops::Desktops::fixed(demo_spaces());
         s.preload_icons();
         s
     };
@@ -134,6 +136,20 @@ fn demo_windows() -> Vec<toplevel::Window> {
     windows[1].activated = true;
     windows[3].minimized = true;
     windows
+}
+
+/// Three desktops, the first with a few windows.
+fn demo_spaces() -> desktops::Spaces {
+    let w = |rect: [f32; 4]| desktops::SpaceWindow { rect, ..Default::default() };
+    desktops::Spaces {
+        active: 0,
+        screen: (1440.0, 856.0),
+        spaces: vec![
+            desktops::Space { windows: vec![w([80.0, 60.0, 760.0, 520.0]), w([520.0, 200.0, 820.0, 560.0])] },
+            desktops::Space { windows: vec![w([300.0, 120.0, 900.0, 600.0])] },
+            desktops::Space::default(),
+        ],
+    }
 }
 
 fn demo_notifications(s: &Shell) {

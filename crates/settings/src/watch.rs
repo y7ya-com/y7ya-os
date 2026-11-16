@@ -33,6 +33,17 @@ impl Drop for Watcher {
 /// written, replaced or removed (removal gives the defaults). Bursts of
 /// events are coalesced, and a file that doesn't parse is skipped.
 pub fn watch(path: &Path, mut on_change: impl FnMut(&Settings) + Send + 'static) -> io::Result<Watcher> {
+    let file = path.to_owned();
+    watch_file(path, move || {
+        if let Ok(s) = Settings::load_from(&file) {
+            on_change(&s);
+        }
+    })
+}
+
+/// Calls `on_change` whenever any file at `path` is written, replaced or
+/// removed, with bursts of events coalesced.
+pub fn watch_file(path: &Path, mut on_change: impl FnMut() + Send + 'static) -> io::Result<Watcher> {
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let name = path.file_name().ok_or_else(|| io::Error::other("settings path has no file name"))?.to_owned();
     std::fs::create_dir_all(dir)?;
@@ -55,7 +66,6 @@ pub fn watch(path: &Path, mut on_change: impl FnMut(&Settings) + Send + 'static)
         return Err(e);
     }
     let (stop_read, stop_write) = (pipe[0], pipe[1]);
-    let path = path.to_owned();
 
     let thread = std::thread::Builder::new().name("settings-watch".into()).spawn(move || {
         let mut buf = [0u8; 4096];
@@ -84,9 +94,7 @@ pub fn watch(path: &Path, mut on_change: impl FnMut(&Settings) + Send + 'static)
                 ours |= events_mention(&buf[..len as usize], &name);
             }
             if ours {
-                if let Ok(s) = Settings::load_from(&path) {
-                    on_change(&s);
-                }
+                on_change();
             }
         }
         unsafe {

@@ -47,7 +47,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub use watch::{Watcher, watch};
+pub use watch::{Watcher, watch, watch_file};
 
 pub const FILE_NAME: &str = "settings.toml";
 
@@ -98,6 +98,25 @@ impl Mode {
             Mode::Light => false,
             Mode::Dark => true,
             Mode::Auto => !(7..19).contains(&hour),
+        }
+    }
+}
+
+/// Whether the system color scheme (KDE's, in `kdeglobals`) is dark, which
+/// "Auto" follows. Dark when there's no `kdeglobals`.
+pub fn system_dark() -> bool {
+    let path = dirs::config_dir().map(|d| d.join("kdeglobals"));
+    let Some(s) = path.and_then(|p| std::fs::read_to_string(p).ok()) else { return true };
+    s.lines().find_map(|l| l.strip_prefix("ColorScheme=")).is_some_and(|v| v.to_lowercase().contains("dark"))
+}
+
+impl Settings {
+    /// Whether the desktop is dark with these settings.
+    pub fn is_dark(&self) -> bool {
+        match self.appearance.mode {
+            Mode::Dark => true,
+            Mode::Light => false,
+            Mode::Auto => system_dark(),
         }
     }
 }

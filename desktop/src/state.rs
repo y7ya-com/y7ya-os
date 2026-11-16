@@ -736,9 +736,7 @@ pub fn detect_dark() -> bool {
     if let Ok(theme) = std::env::var("Y7_THEME") {
         return theme == "dark";
     }
-    let path = dirs::config_dir().map(|d| d.join("kdeglobals"));
-    let Some(s) = path.and_then(|p| std::fs::read_to_string(p).ok()) else { return true };
-    s.lines().find_map(|l| l.strip_prefix("ColorScheme=")).is_some_and(|v| v.to_lowercase().contains("dark"))
+    settings::system_dark()
 }
 
 #[derive(Default)]

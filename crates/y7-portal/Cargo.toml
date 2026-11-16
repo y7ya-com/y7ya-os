@@ -1,0 +1,10 @@
+[package]
+name = "y7-portal"
+version = "0.1.0"
+edition = "2024"
+description = "y7ya-os's portal backend: tells apps (browsers, GTK, Qt, Electron) whether the desktop is light or dark"
+
+[dependencies]
+dirs = { workspace = true }
+settings = { path = "../settings" }
+zbus = "5.19.0"

@@ -7404,6 +7404,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "y7-portal"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "settings",
+ "zbus",
+]
+
+[[package]]
 name = "y7-sync"
 version = "0.1.0"
 dependencies = [

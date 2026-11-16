@@ -9,6 +9,7 @@
 //! e.g. `y7-desktop msg space 1` or `y7-desktop msg activate org.kde.konsole`.
 
 mod anim;
+mod autostart;
 mod backend;
 mod config;
 mod cursor;
@@ -127,6 +128,8 @@ fn start_session_services(desk: &Desk) {
     let _ = std::process::Command::new("dbus-update-activation-environment").arg("--systemd").args(vars).status();
     let _ = std::process::Command::new("systemctl").args(["--user", "import-environment"]).args(vars).status();
     start_desktop_services(desk);
+    // The user's login apps, and KDE's password prompt for admin tasks.
+    autostart::start(desk);
 }
 
 fn start_desktop_services(desk: &Desk) {

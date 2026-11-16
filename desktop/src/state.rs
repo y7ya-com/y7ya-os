@@ -670,10 +670,14 @@ impl Desk {
 
     /// Runs `cmd` as a client of this desktop.
     pub fn spawn(&self, cmd: &str) {
-        let mut parts = cmd.split_whitespace();
-        let Some(program) = parts.next() else { return };
+        let argv: Vec<String> = cmd.split_whitespace().map(String::from).collect();
+        self.spawn_argv(&argv);
+    }
+
+    pub fn spawn_argv(&self, argv: &[String]) {
+        let Some((program, args)) = argv.split_first() else { return };
         let result = std::process::Command::new(program)
-            .args(parts)
+            .args(args)
             // Qt, GTK and cursors in the Mac look, in the current appearance.
             .envs(settings::look::env(self.dark))
             .env("WAYLAND_DISPLAY", &self.socket_name)
@@ -686,8 +690,10 @@ impl Desk {
             .env("MOZ_ENABLE_WAYLAND", "1")
             .env("ELECTRON_OZONE_PLATFORM_HINT", "wayland")
             .spawn();
-        if let Err(e) = result {
-            tracing::warn!("couldn't start {cmd}: {e}");
+        match result {
+            // Collected when it exits, so finished apps don't linger as zombies.
+            Ok(mut child) => drop(std::thread::Builder::new().name("reaper".into()).spawn(move || child.wait())),
+            Err(e) => tracing::warn!("couldn't start {}: {e}", argv.join(" ")),
         }
     }
 }

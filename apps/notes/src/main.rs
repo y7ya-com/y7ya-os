@@ -11,7 +11,7 @@ use ui::WindowOptions;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     // `notes --snapshot out.png [--light] [--sync] [--folder <name>|deleted] [--search <text>]
-    // [--menu] [--folder-menu] [--rename] [--no-sidebar]` renders sample data offscreen.
+    // [--menu] [--folder-menu] [--rename] [--no-sidebar] [--size WxH]` renders sample data offscreen.
     if let Some(i) = args.iter().position(|a| a == "--snapshot") {
         let path = std::path::PathBuf::from(args.get(i + 1).expect("--snapshot needs a path"));
         let dark = !args.iter().any(|a| a == "--light");
@@ -25,7 +25,11 @@ fn main() {
             let engine = y7_sync::Engine::start(dir, y7_sync::device_name(), Arc::new(SyncEvents::default()));
             store.core = Some(Arc::new(notes_core::Core::with_hub(Arc::new(engine))));
         }
-        ui::snapshot((1180.0, 740.0), 2.0, dark, &path, |cx| NotesApp::new(store, None, cx), |app, cx| {
+        let size = arg("--size").and_then(|s| {
+            let (w, h) = s.split_once('x')?;
+            Some((w.parse().ok()?, h.parse().ok()?))
+        });
+        ui::snapshot(size.unwrap_or((1180.0, 740.0)), 2.0, dark, &path, |cx| NotesApp::new(store, None, cx), |app, cx| {
             if let Some(name) = arg("--folder") {
                 app.show_folder(&name, cx);
             }
@@ -67,9 +71,13 @@ fn main() {
             title: "Notes".into(),
             app_id: "notes".into(),
             size: (1180.0, 740.0),
-            min_size: (720.0, 420.0),
+            min_size: (560.0, 400.0),
             decorations: false,
         },
-        move |cx| NotesApp::new(store, Some(events), cx),
+        move |cx| {
+            let mut app = NotesApp::new(store, Some(events), cx);
+            app.remember_layout(y7_sync::legacy_notes_dir().join("layout"));
+            app
+        },
     );
 }

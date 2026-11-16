@@ -3,6 +3,7 @@ pub mod model;
 mod theme;
 
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -14,7 +15,15 @@ use notes_core::NOTES_DOC;
 use sync_ui::{Pairing, PairingHost, SyncEvents};
 use theme::Theme;
 
+// Column widths: the sidebar and the note list can be dragged between these;
+// the editor keeps at least EDITOR_MIN, and the sidebar tucks away when the
+// window gets too narrow for all three.
+const SIDEBAR_MIN: f32 = 180.0;
+const SIDEBAR_MAX: f32 = 340.0;
 const LIST_W: f32 = 300.0;
+const LIST_MIN: f32 = 220.0;
+const LIST_MAX: f32 = 480.0;
+const EDITOR_MIN: f32 = 320.0;
 const SAVE_DELAY: Duration = Duration::from_millis(600);
 const PURGE_AFTER_SECS: i64 = 30 * 24 * 3600;
 
@@ -22,6 +31,21 @@ const PURGE_AFTER_SECS: i64 = 30 * 24 * 3600;
 pub enum View {
     Folder(u64),
     Deleted,
+}
+
+/// A column divider being dragged.
+#[derive(Clone, Copy, PartialEq)]
+enum Split {
+    Sidebar,
+    List,
+}
+
+/// How wide the columns are at the window's current width.
+#[derive(Clone, Copy)]
+struct Columns {
+    sidebar: Option<f32>,
+    list: f32,
+    editor: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -47,6 +71,16 @@ pub struct NotesApp {
     rename: Rc<RefCell<TextInput>>,
     renaming: Option<u64>,
     sidebar_open: bool,
+    /// Tucked away because the window got narrow; comes back when it widens.
+    sidebar_squeezed: bool,
+    /// Whether all three columns fit, as of the last layout.
+    columns_fit: bool,
+    sidebar_w: f32,
+    list_w: f32,
+    /// The divider being dragged, and where on it the pointer took hold.
+    split: Option<(Split, f32)>,
+    /// Where the column widths are remembered (not in previews).
+    layout_file: Option<PathBuf>,
     menu: Option<Menu<MenuAction>>,
     dirty_since: Option<Instant>,
     events: Option<Arc<SyncEvents>>,
@@ -85,6 +119,12 @@ impl NotesApp {
             rename: Rc::new(RefCell::new(rename)),
             renaming: None,
             sidebar_open: true,
+            sidebar_squeezed: false,
+            columns_fit: true,
+            sidebar_w: native::SIDEBAR_W,
+            list_w: LIST_W,
+            split: None,
+            layout_file: None,
             menu: None,
             dirty_since: None,
             events,
@@ -97,6 +137,74 @@ impl NotesApp {
 
     fn theme(cx: &Cx) -> Theme {
         if cx.dark { Theme::dark() } else { Theme::light() }
+    }
+
+    // -- layout ---------------------------------------------------------------
+
+    /// Reads the column widths from `path`, and saves them there when they change.
+    pub fn remember_layout(&mut self, path: PathBuf) {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            for line in text.lines() {
+                match line.split_once('=') {
+                    Some(("sidebar", v)) => self.sidebar_w = v.parse().unwrap_or(self.sidebar_w),
+                    Some(("list", v)) => self.list_w = v.parse().unwrap_or(self.list_w),
+                    Some(("sidebar_open", v)) => self.sidebar_open = v != "false",
+                    _ => {}
+                }
+            }
+        }
+        self.sidebar_w = self.sidebar_w.clamp(SIDEBAR_MIN, SIDEBAR_MAX);
+        self.list_w = self.list_w.clamp(LIST_MIN, LIST_MAX);
+        self.layout_file = Some(path);
+    }
+
+    fn save_layout(&self) {
+        let Some(path) = &self.layout_file else { return };
+        let text = format!("sidebar={}\nlist={}\nsidebar_open={}\n", self.sidebar_w.round(), self.list_w.round(), self.sidebar_open);
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(path, text);
+    }
+
+    fn sidebar_shown(&self) -> bool {
+        self.sidebar_open && !self.sidebar_squeezed
+    }
+
+    fn set_sidebar(&mut self, open: bool) {
+        self.sidebar_open = open;
+        self.sidebar_squeezed = false;
+        self.save_layout();
+    }
+
+    /// Tucks the sidebar away when the window narrows past the point where
+    /// all three columns fit, and brings it back when it widens again.
+    fn fit_columns(&mut self, w: f32) -> Columns {
+        let fits = w >= self.sidebar_w + LIST_MIN + EDITOR_MIN + 2.0;
+        if fits != self.columns_fit {
+            self.columns_fit = fits;
+            self.sidebar_squeezed = !fits;
+        }
+        let sidebar = self.sidebar_shown().then_some(self.sidebar_w);
+        let used = sidebar.map_or(0.0, |s| s + 1.0);
+        let list = self.list_w.min(w - used - 1.0 - EDITOR_MIN).max(LIST_MIN);
+        Columns { sidebar, list, editor: (w - used - list - 1.0).max(0.0) }
+    }
+
+    /// An invisible strip over a column divider at `x` that drags it.
+    fn split_handle(&self, which: Split, x: f32, width: f32, h: f32) -> Div<Self> {
+        let id = match which {
+            Split::Sidebar => "split-sidebar",
+            Split::List => "split-list",
+        };
+        div().id(id).absolute(x - 3.0, 0.0).w(7.0).h(h).cursor(CursorIcon::EwResize).on_mouse_down(move |s: &mut Self, cx: &mut Cx| {
+            // Start from the width as shown, which may be narrower than wanted.
+            match which {
+                Split::Sidebar => s.sidebar_w = width,
+                Split::List => s.list_w = width,
+            }
+            s.split = Some((which, cx.mouse.x - width));
+        })
     }
 
     fn mark_dirty(&mut self) {
@@ -505,7 +613,7 @@ impl NotesApp {
             .child(canvas(move |s, b| icon(s, b, color)).size(20.0))
     }
 
-    fn sidebar(&self, cx: &Cx, t: &Theme) -> Div<Self> {
+    fn sidebar(&self, width: f32, cx: &Cx, t: &Theme) -> Div<Self> {
         let mut header = div()
             .h(native::TOOLBAR_H)
             .shrink_0()
@@ -518,7 +626,7 @@ impl NotesApp {
         if let Some(buttons) = self.window_buttons(true, cx, t) {
             header = header.child(buttons);
         }
-        let header = header.child(Self::icon_button("toggle-sidebar", true, cx, t, icons::sidebar, |s, _| s.sidebar_open = false));
+        let header = header.child(Self::icon_button("toggle-sidebar", true, cx, t, icons::sidebar, |s, _| s.set_sidebar(false)));
 
         let mut rows: Vec<AnyElement<Self>> = vec![native::sidebar_header("On My Computer", cx).pt(4.0).into()];
         for f in &self.store.folders {
@@ -545,7 +653,7 @@ impl NotesApp {
             .child(text("New Folder").color(if pressed { t.text } else { t.text_secondary }).truncate());
 
         div()
-            .w(native::SIDEBAR_W)
+            .w(width)
             .h_full()
             .shrink_0()
             .flex_col()
@@ -631,7 +739,7 @@ impl NotesApp {
             .child(text(count.to_string()).tabular().color(t.text_secondary).shrink_0())
     }
 
-    fn list_column(&self, cx: &Cx, t: &Theme) -> Div<Self> {
+    fn list_column(&self, width: f32, cx: &Cx, t: &Theme) -> Div<Self> {
         let notes = self.visible_notes();
         let (title, empty) = if self.searching() {
             ("Search Results".to_string(), "No Results")
@@ -652,14 +760,14 @@ impl NotesApp {
             .flex_row()
             .items_center()
             .gap(8.0)
-            .pl(if self.sidebar_open { 22.0 } else { native::TRAFFIC_LIGHTS_X })
+            .pl(if self.sidebar_shown() { 22.0 } else { native::TRAFFIC_LIGHTS_X })
             .pr(10.0)
             .window_drag();
-        if !self.sidebar_open {
+        if !self.sidebar_shown() {
             if let Some(buttons) = self.window_buttons(true, cx, t) {
                 toolbar = toolbar.child(buttons.mr(8.0));
             }
-            toolbar = toolbar.child(Self::icon_button("toggle-sidebar", true, cx, t, icons::sidebar, |s, _| s.sidebar_open = true));
+            toolbar = toolbar.child(Self::icon_button("toggle-sidebar", true, cx, t, icons::sidebar, |s, _| s.set_sidebar(true)));
         }
         toolbar = toolbar
             .child(
@@ -713,7 +821,7 @@ impl NotesApp {
                 div()
                     .h(1.0)
                     .mx_auto()
-                    .w(LIST_W - 2.0 * 10.0 - 2.0 * 12.0)
+                    .w(width - 2.0 * 10.0 - 2.0 * 12.0)
                     .bg(if show_sep { t.row_divider } else { Color::TRANSPARENT })
                     .into(),
             );
@@ -733,7 +841,7 @@ impl NotesApp {
         }
 
         div()
-            .w(LIST_W)
+            .w(width)
             .h_full()
             .shrink_0()
             .flex_col()
@@ -789,12 +897,16 @@ impl NotesApp {
         row
     }
 
-    fn editor_column(&self, cx: &Cx, t: &Theme) -> Div<Self> {
+    fn editor_column(&self, width: f32, cx: &Cx, t: &Theme) -> Div<Self> {
         let accent_icon = native::toolbar_ink(cx, t.icon);
         let query_set = !self.query.is_empty();
+        let buttons = self.window_buttons(false, cx, t);
+        // The search field gives up width before the compose button and the
+        // window buttons do.
+        let room = width - 2.0 * 10.0 - 32.0 - 12.0 - if buttons.is_some() { 96.0 } else { 0.0 };
         let search = div()
             .id("search-box")
-            .w(200.0)
+            .w(room.clamp(120.0, 220.0))
             .h(28.0)
             .rounded(7.0)
             .bg(t.field)
@@ -833,7 +945,7 @@ impl NotesApp {
             .px(10.0)
             .window_drag()
             .child(Self::icon_button("compose", true, cx, t, icons::compose, |s: &mut Self, cx: &mut Cx| s.new_note(cx)))
-            .child(div().flex_row().items_center().gap(12.0).child(search).children(self.window_buttons(false, cx, t)));
+            .child(div().flex_row().items_center().gap(12.0).child(search).children(buttons));
 
         let note = self.selected.and_then(|id| self.store.note(id));
         let body: AnyElement<Self> = match note {
@@ -868,7 +980,7 @@ impl NotesApp {
             None => div().flex_1().into(),
         };
 
-        div().flex_1().h_full().flex_col().bg(t.content).child(toolbar).child(body)
+        div().w(width).h_full().shrink_0().flex_col().bg(t.content).child(toolbar).child(body)
     }
 }
 
@@ -889,11 +1001,20 @@ impl App for NotesApp {
         let (w, h) = cx.window_size;
         let divider = || div().w(1.0).h_full().shrink_0().bg(t.divider);
 
+        let cols = self.fit_columns(w);
+
         let mut root = div().w(w).h(h).flex_row().bg(t.content).text_color(t.text);
-        if self.sidebar_open {
-            root = root.child(self.sidebar(cx, &t)).child(divider());
+        let mut x = 0.0;
+        let mut handles = Vec::new();
+        if let Some(sw) = cols.sidebar {
+            root = root.child(self.sidebar(sw, cx, &t)).child(divider());
+            handles.push(self.split_handle(Split::Sidebar, sw, sw, h));
+            x = sw + 1.0;
         }
-        root = root.child(self.list_column(cx, &t)).child(divider()).child(self.editor_column(cx, &t));
+        root = root.child(self.list_column(cols.list, cx, &t)).child(divider()).child(self.editor_column(cols.editor, cx, &t));
+        handles.push(self.split_handle(Split::List, x + cols.list, cols.list, h));
+        // Over the columns, so the toolbars' window dragging doesn't win.
+        root = root.children(handles);
         if let Some(menu) = &self.menu {
             root = root.child(menu.render(cx, |s: &mut Self, a, cx| s.run_menu(a, cx), |s: &mut Self, _| s.menu = None));
         }
@@ -1007,6 +1128,36 @@ impl App for NotesApp {
             self.query = self.search.borrow().text();
             cx.scroll_to_top("list-scroll");
             self.ensure_selection(cx);
+        }
+    }
+
+    fn on_drag(&mut self, cx: &mut Cx) {
+        let Some((which, grab)) = self.split else { return };
+        let w = cx.window_size.0;
+        let want = cx.mouse.x - grab;
+        match which {
+            Split::Sidebar => {
+                // Dragged well past its narrowest, the sidebar closes, as on a Mac.
+                if want < SIDEBAR_MIN * 0.5 {
+                    self.split = None;
+                    self.set_sidebar(false);
+                } else {
+                    let most = (w - LIST_MIN - EDITOR_MIN - 2.0).min(SIDEBAR_MAX);
+                    self.sidebar_w = want.min(most).max(SIDEBAR_MIN);
+                }
+            }
+            Split::List => {
+                let used = if self.sidebar_shown() { self.sidebar_w + 1.0 } else { 0.0 };
+                let most = (w - used - 1.0 - EDITOR_MIN).min(LIST_MAX);
+                self.list_w = want.min(most).max(LIST_MIN);
+            }
+        }
+        cx.request_redraw();
+    }
+
+    fn on_mouse_up(&mut self, _cx: &mut Cx) {
+        if self.split.take().is_some() {
+            self.save_layout();
         }
     }
 

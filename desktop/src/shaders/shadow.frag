@@ -63,7 +63,12 @@ float inside_rounded(vec2 p, vec2 lo, vec2 hi, float r) {
 
 float layer(vec2 p, vec2 lo, vec2 hi, vec3 l) {
     vec2 dy = vec2(0.0, l.y);
-    return box_shadow(lo + dy, hi + dy, p, max(l.x, 0.3), radius) * l.z;
+    float sigma = max(l.x, 0.3);
+    // A layer is nothing beyond 3 sigma of its box; the tight ones only
+    // cover a thin band, so most pixels skip them.
+    vec2 gap = max(lo + dy - p, p - hi - dy);
+    if (max(gap.x, gap.y) > 3.0 * sigma) return 0.0;
+    return box_shadow(lo + dy, hi + dy, p, sigma, radius) * l.z;
 }
 
 void main() {
@@ -72,11 +77,24 @@ void main() {
     vec2 lo = rect.xy;
     vec2 hi = rect.xy + rect.zw;
 
+    // Nothing under the window itself (keeps translucent windows clean). Most
+    // of the element is window, so skip the costly blur there...
+    float outside = 1.0 - inside_rounded(p, lo, hi, radius);
+    if (outside <= 0.0) {
+        gl_FragColor = vec4(0.0);
+        return;
+    }
+    // ...and beyond the reach of the widest layer (3 sigma past its offset).
+    float reach = 3.0 * max(max(edge.x, mid.x), far.x) + max(max(abs(edge.y), abs(mid.y)), abs(far.y));
+    vec2 gap = max(lo - p, p - hi);
+    if (max(gap.x, gap.y) > reach) {
+        gl_FragColor = vec4(0.0);
+        return;
+    }
+
     // Layers stack like separate shadows would.
     float a = 1.0 - (1.0 - layer(p, lo, hi, edge)) * (1.0 - layer(p, lo, hi, mid)) * (1.0 - layer(p, lo, hi, far));
-
-    // Nothing under the window itself (keeps translucent windows clean).
-    a *= 1.0 - inside_rounded(p, lo, hi, radius);
+    a *= outside;
 
     gl_FragColor = vec4(0.0, 0.0, 0.0, a) * alpha;
 #if defined(DEBUG_FLAGS)

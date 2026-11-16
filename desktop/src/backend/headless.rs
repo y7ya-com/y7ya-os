@@ -38,8 +38,10 @@ struct Headless {
 
 impl Headless {
     fn render(&mut self, desk: &mut Desk) {
+        let t0 = std::time::Instant::now();
         let Ok(mut fb) = self.renderer.bind(&mut self.target) else { return };
         let elements = render::elements(desk, &mut self.look, &mut self.renderer);
+        let t1 = t0.elapsed();
         // The target keeps its contents, so only damage needs redrawing.
         // Y7_FULL_REDRAW=1 repaints everything each frame (to debug damage).
         let age = if std::env::var_os("Y7_FULL_REDRAW").is_some() { 0 } else { 1 };
@@ -47,6 +49,11 @@ impl Headless {
             tracing::warn!("render failed: {e:?}");
         }
         drop(fb);
+        // Y7_FRAME_LOG=1 prints how long each frame took, GPU included.
+        if std::env::var_os("Y7_FRAME_LOG").is_some() {
+            let _ = self.renderer.with_context(|gl| unsafe { gl.Finish() });
+            eprintln!("FRAME elements={:?} total={:?} n={}", t1, t0.elapsed(), elements.len());
+        }
         render::send_frames(desk);
         desk.space.refresh();
         desk.popups.cleanup();
